@@ -86,7 +86,7 @@ function SignInForm({ onForgot }: { onForgot: (email: string) => void }) {
       toast.success(`Welcome back, ${r.data.name}.`, "Signed in");
       router.replace(safeNext(params.get("next")) ?? homeFor(r.data.role));
     } catch (e) {
-      setError(errorMessage(e, "Sign in failed. Please try again."));
+      setError(errorMessage(e, "Sign in failed. Please try again !"));
     }
   };
 
