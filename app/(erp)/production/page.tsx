@@ -8,58 +8,53 @@ import {
   AlertTriangle,
   ArrowLeft,
   ArrowRight,
-  Banknote,
   Boxes,
   Building2,
   CalendarDays,
-  Check,
   CheckCircle2,
-  ClipboardList,
   Droplets,
   Factory,
   Hash,
   Layers,
   ListOrdered,
-  Palette,
-  Paperclip,
-  PenLine,
   Play,
   RefreshCw,
   Search,
   Sparkles,
+  Timer,
   Truck,
-  UserRound,
-  Warehouse as WarehouseIcon,
+  Warehouse,
+  X,
 } from "lucide-react";
-import { api, qs } from "@/lib/api";
-import type { Warehouse } from "@/lib/types";
-import { useApiQuery } from "@/lib/use-api-query";
+import { prefetchApi, useApiQuery } from "@/lib/use-api-query";
+import { ATTENTION_KINDS } from "@/lib/attention";
 import { toast } from "@/lib/toast-store";
 import { cn, gsmText, kg, money, toNumber } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { WeightInput } from "@/components/ui/weight-input";
 import type { BadgeTone } from "@/components/ui/badge";
 import { Loading } from "@/components/loading";
 import { useAuth } from "@/components/auth-provider";
-import { SearchableSelect } from "@/components/ui/searchable-select";
-import { CardHead, DestinationToggle, Field, FieldGroup, Pill, SaveChecklist, SectionHeading } from "./fields";
-import { BatchProcesses, BatchTotals } from "./batch-summary";
-import { DeliveryStage } from "./delivery-stage";
-import { InProgressNote, StartProcess } from "./process-start";
-import { KnittingStage, StartKnitting, type RunStage } from "./knitting-stage";
-import { WizardNav, WizardSteps, WizardSummary } from "./start-wizard";
-import { Attachments } from "./attachments";
+import { keepDialogForOpenDropdown } from "@/components/ui/searchable-select";
+import * as Dialog from "@radix-ui/react-dialog";
+import { ProcessChallanDialog } from "@/components/process-challan";
+import { CardHead, Pill } from "./fields";
+import { ProcessCards, type CardKey } from "./process-cards";
+import { CompactingForm, DeliveryForm, DyeingForm, KnittingForm, StartProcessForm } from "./process-forms";
+import { StartDialog } from "./start-dialog";
+import { DailyKnitting, FabricSection, Figures, MachinesSection, StockSection } from "./floor-sections";
+import { materialOut, type ProductionOverview } from "./floor-data";
+import { FloorClock } from "../masters/machines/floor";
+import "../masters/machines/machines.css";
 import { ExpenseLedger } from "./expense-ledger";
-import { completedInWarehouse, isCompacting, isDyeing, isKnitting, leftToDeliver, localDate, numeric, sentToWarehouse, shortDate, warehouseDelivery, weightCheck, WEIGHT_TOLERANCE_KG, type AttachmentStage, type FabricFlow, type FlowDirectory, type StageKey } from "./types";
-import { plural, StockPicker, type StockScope } from "./stock-picker";
-import { WeightChange } from "./weight-change";
+import { ProcessRegister, processRecords } from "./process-register";
+import { completedInWarehouse, greyLeft, isCompacting, isDyeing, isKnitting, leftToDeliver, localDate, lotStage, sentToWarehouse, shortDate, warehouseDelivery, type FabricFlow, type FlowDirectory, type RunStage, type StageKey } from "./types";
 import { itemHref } from "../warehouses/item-details";
 import "./production.css";
 
 type FlowResponse = { data: FabricFlow[] };
-type ProcessStart = "knitting" | "dyeing" | "compacting";
-type StartStock = { category: string; itemCode: string; itemName: string; warehouseId: string; unit: string; balanceKg: number };
+/** Until the mills and parties have loaded, the forms offer none. */
+const EMPTY_DIRECTORY: FlowDirectory = { dealers: [], mills: [], knittingMills: [], dyeingMills: [], compactingMills: [], yarnStocks: [], fabricStocks: [] };
 
 const stages = [
   { key: "knitting" as const, label: "Knitting", icon: Factory },
@@ -73,8 +68,18 @@ const nextAfter = { knitting: "dyeing", dyeing: "compacting" } as const;
 /** A process has started and isn't completed yet: its fabric is at that party now. */
 const processRunning = (flow: FabricFlow) => isKnitting(flow) || isDyeing(flow) || isCompacting(flow);
 
-/** The journey step (0 yarn, 1 knitting, 2 dyeing…) a batch that ended in a warehouse finished on. */
+/** Roll up independently moving colour lots without hiding work still held by a processor. */
+const lotSummary = (flow: FabricFlow) => {
+  const counts = { Dyeing: 0, Dyed: 0, Compacting: 0, "To deliver": 0, Delivered: 0 };
+  for (const lot of flow.lots) counts[lotStage(lot)] += 1;
+  const active = counts.Dyeing + counts.Dyed + counts.Compacting + counts["To deliver"];
+  return { counts, active, delivered: counts.Delivered, allDelivered: flow.lots.length > 0 && active === 0 };
+};
+
+/** The journey step (0 yarn, 1 knitting, 2 dyeing…) a batch that ended in a warehouse (or at a party) finished on. */
 const endedStep = (flow: FabricFlow) => {
+  if (flow.knittingDestination === "PARTY") return 1;
+  if (flow.dyeingDestination === "PARTY") return 2;
   const ended = completedInWarehouse(flow);
   return ended ? (ended.stage === "knitting" ? 1 : 2) : null;
 };
@@ -88,6 +93,29 @@ const whereIs = (flow: FabricFlow): { label: string; tone: BadgeTone; place: str
       ? `Other mill · ${flow.knittingPartyDetails ?? flow.knittingMillDetails ?? "manual record"}`
       : `Own mill · ${flow.knittingMillDetails ?? "machine task"}`;
     return { label: flow.knittingMillType === "OTHER" ? "Other mill" : "Knitting task", tone: "warning", place: `${place}${due}`, next: "knitting", action: flow.knittingMillType === "OTHER" ? "Enter knitting record" : "Finish knitting" };
+  }
+  // A process delivered its fabric straight to a party: the batch ended there.
+  if (flow.knittingDestination === "PARTY" || flow.dyeingDestination === "PARTY") {
+    const party = flow.deliveries.find((d) => d.destination === "CUSTOMER")?.partyName ?? "a party";
+    const stage = flow.knittingDestination === "PARTY" ? "Grey fabric" : "Dyed fabric";
+    return { label: "Delivered", tone: "success", place: `${stage} delivered to ${party}${flow.finalDate ? ` on ${shortDate(flow.finalDate)}` : ""}`, next: null, action: "" };
+  }
+  // A knitting batch dyed in lots: each lot goes on by itself; the batch only has grey fabric left (or none).
+  if (flow.lots.length) {
+    const left = greyLeft(flow) ?? 0;
+    const summary = lotSummary(flow);
+    const pending = flow.lots.filter((lot) => lotStage(lot) !== "Delivered");
+    const pendingText = pending.slice(0, 3).map((lot) => `${lot.color ?? lot.flowNo} (${lotStage(lot).toLowerCase()})`).join(", ");
+    const lots = `${flow.lots.length} dyeing lot${flow.lots.length === 1 ? "" : "s"}`;
+    if (left > 0.0005) return { label: lots, tone: "info", place: `${pendingText} · ${kg(left)} grey fabric left to assign`, next: "dyeing", action: "Dye another colour" };
+    if (summary.allDelivered) return { label: "All colours delivered", tone: "success", place: `${lots} completed and delivered independently`, next: null, action: "" };
+    return {
+      label: `${summary.active} colour${summary.active === 1 ? "" : "s"} pending`,
+      tone: "warning",
+      place: `${pendingText}${pending.length > 3 ? ` +${pending.length - 3} more` : ""} · ${summary.delivered} delivered`,
+      next: null,
+      action: "",
+    };
   }
   const ended = completedInWarehouse(flow);
   if (ended) {
@@ -127,77 +155,95 @@ const whereIs = (flow: FabricFlow): { label: string; tone: BadgeTone; place: str
   if (flow.status === "AT_OFFICE") {
     const left = leftToDeliver(flow) ?? 0;
     return (flow.finalDeliveredKg ?? 0) > 0
-      ? { label: "Partly delivered", tone: "info", place: `Partly delivered — ${kg(left)} still to deliver`, next: "compacting", action: "Deliver the rest" }
-      : { label: "Ready to deliver", tone: "info", place: "Compacted — finished fabric ready to deliver", next: "compacting", action: "Deliver" };
+      ? { label: "Compacted · part sent", tone: "info", place: `Compacted — ${kg(left)} not sent on yet`, next: "compacting", action: "Send it on" }
+      : { label: "Compacted", tone: "info", place: "Compacted — the finished fabric is not sent on yet", next: "compacting", action: "Send it on" };
   }
   return { label: "Delivered", tone: "success", place: "Delivered — all processes complete", next: null, action: "" };
 };
 
-/** How far through the processes a batch is: 0 knitting, 1 dyeing, 2 compacting, 3 delivering, 4 all delivered (or ended in a warehouse). */
+/** How far through the processes a batch is: 0 knitting, 1 dyeing, 2 compacting, 3 completed (delivered, or ended in a warehouse). */
 const progressOf = (flow: FabricFlow) => {
   if (flow.status === "PURCHASED" || isKnitting(flow)) return 0;
+  // A knitting batch with dyeing lots is at dyeing while grey fabric is left, done once all of it is in lots.
+  if (flow.lots.length) {
+    if ((greyLeft(flow) ?? 0) > 0.0005) return 1;
+    const summary = lotSummary(flow);
+    if (summary.allDelivered) return 3;
+    // Keep the parent batch active while any colour is at dyeing, compacting, or waiting for delivery.
+    return summary.counts.Compacting > 0 || summary.counts["To deliver"] > 0 ? 2 : 1;
+  }
   const sent = sentToWarehouse(flow);
   if (sent) return sent.stage === "knitting" ? 0 : 1;
-  if (completedInWarehouse(flow)) return 4;
+  if (completedInWarehouse(flow)) return 3;
   if (flow.status === "KNITTING") return 1;
   if (flow.status === "DYEING" || flow.status === "COMPACTING") return 2;
-  if (flow.status === "AT_OFFICE") return 3;
-  return 4;
+  // Compacted fabric not sent on yet (older batches) is still compacting's.
+  if (flow.status === "AT_OFFICE") return 2;
+  return 3;
 };
-const progressAccent = ["is-knitting", "is-dyeing", "is-compacting", "is-delivery", "is-complete"];
+const progressAccent = ["is-knitting", "is-dyeing", "is-compacting", "is-complete"];
 
-type Filter = "all" | "processing" | "knitting" | "dyeing" | "compacting" | "delivering" | "completed";
+/** A batch at the same step longer than this is pointed out (the Dashboard uses the same rule). */
+const STUCK_DAYS = 10;
+/** When the batch reached the step it is at now (as the Dashboard works it out). */
+const stepSince = (flow: FabricFlow) =>
+  flow.status === "AT_OFFICE" ? flow.compactingFinishedAt ?? flow.compactingDate
+    : flow.status === "COMPACTING" ? flow.compactingDate ?? flow.dyeingFinishedAt
+      : flow.status === "DYEING" ? flow.dyeingDate ?? flow.knittingFinishedAt
+        : flow.status === "KNITTING" ? flow.knittingFinishedAt ?? flow.knittingDate ?? flow.purchaseDate
+          : flow.purchaseDate;
+/** Whole days at the current step, for a batch still in process; null once it is completed. */
+const daysInStep = (flow: FabricFlow) => {
+  if (progressOf(flow) >= 3) return null;
+  const since = stepSince(flow);
+  if (!since) return null;
+  const from = new Date(since);
+  from.setHours(0, 0, 0, 0);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((today.getTime() - from.getTime()) / 86_400_000));
+};
+/**
+ * Waiting too long at one step. Yarn not started yet doesn't count (as on the Dashboard), nor a knitting batch whose
+ * grey fabric is all in dyeing lots: those lots are listed, and timed, on their own.
+ */
+const isStuck = (flow: FabricFlow) => {
+  if (flow.status === "PURCHASED" || (flow.lots.length > 0 && (greyLeft(flow) ?? 0) <= 0.0005)) return false;
+  return (daysInStep(flow) ?? 0) > STUCK_DAYS;
+};
+/** A timestamp's date on this computer's calendar (IST), not UTC's. */
+const dayOf = (value: string) => {
+  const d = new Date(value);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+const batchPath = (flowNo: string) => `/production/fabric-flows/code/${encodeURIComponent(flowNo)}`;
+const DIRECTORY_PATH = "/production/fabric-flows/directory";
+/** Hovering or focusing a batch starts loading its page, so opening it is instant. */
+const prefetchBatch = (flow: FabricFlow) => {
+  prefetchApi(batchPath(flow.flowNo));
+  prefetchApi(DIRECTORY_PATH);
+};
+
+type Filter = "all" | "processing" | "knitting" | "dyeing" | "compacting" | "completed";
 type ListOrder = "date" | "code" | "process";
-const progressFilter: Filter[] = ["knitting", "dyeing", "compacting", "delivering", "completed"];
+const progressFilter: Filter[] = ["knitting", "dyeing", "compacting", "completed"];
 const filters: Array<{ key: Filter; label: string; icon: LucideIcon; accent: string }> = [
   { key: "all", label: "All batches", icon: Layers, accent: "is-all" },
   { key: "processing", label: "Processing", icon: RefreshCw, accent: "is-processing" },
   { key: "knitting", label: "Knitting", icon: Factory, accent: "is-knitting" },
   { key: "dyeing", label: "At dyeing", icon: Droplets, accent: "is-dyeing" },
   { key: "compacting", label: "At compacting", icon: Sparkles, accent: "is-compacting" },
-  { key: "delivering", label: "To deliver", icon: Truck, accent: "is-delivery" },
   { key: "completed", label: "Completed", icon: CheckCircle2, accent: "is-complete" },
 ];
 /** Whether a batch belongs under a filter: "processing" is every batch not yet completed (delivered or ended in a warehouse). */
 const inFilter = (flow: FabricFlow, filter: Filter) =>
-  filter === "all" || (filter === "processing" ? progressOf(flow) < 4 : progressFilter[progressOf(flow)] === filter);
+  filter === "all" || (filter === "processing" ? progressOf(flow) < 3 : progressFilter[progressOf(flow)] === filter);
 
 /** Where the batch's yarn came from, by item code (older batches started from a purchase entry). */
 const yarnSource = (flow: FabricFlow) =>
-  flow.yarnItemCode ? `Yarn ${flow.yarnItemCode}${flow.yarnWarehouse ? ` · ${flow.yarnWarehouse.code}` : ""}` : "Yarn purchase";
-
-/** The weight a process sent into a warehouse, if it went there. */
-const warehouseWeight = (flow: FabricFlow, stage: "KNITTING" | "DYEING") => {
-  const delivery = warehouseDelivery(flow, stage);
-  return delivery ? toNumber(delivery.weightKg) : null;
-};
-
-/** One line per process for a batch's journey: when it happened, who did it and the weight that came out. */
-const processSteps = (flow: FabricFlow) => [
-  { key: "yarn", label: flow.yarnItemCode ? "Yarn from stock" : "Yarn purchase", date: flow.purchaseDate, who: yarnSource(flow), weight: flow.purchasedWeightKg },
-  { key: "knitting", label: "Knitting", date: flow.knittingFinishedAt ?? flow.knittingDate, who: flow.knittingPartyDetails, weight: flow.dyeingDeliveryKg ?? warehouseWeight(flow, "KNITTING") },
-  { key: "dyeing", label: "Dyeing", date: flow.dyeingFinishedAt ?? flow.dyeingDate, who: [flow.dyeingPartyDetails, flow.color].filter(Boolean).join(" · ") || null, weight: flow.compactingDeliveryKg ?? warehouseWeight(flow, "DYEING") },
-  { key: "compacting", label: "Compacting", date: flow.compactingFinishedAt ?? flow.compactingDate, who: flow.compactingPartyDetails ?? (flow.compactingOutwardNo && `Outward ${flow.compactingOutwardNo}`), weight: flow.officeDeliveryKg },
-  { key: "final", label: "Delivery", date: flow.finalDate, who: deliverySummary(flow), weight: flow.finalDeliveredKg },
-];
-const journeyStyle: Array<{ icon: LucideIcon; accent: string; opens: StageKey }> = [
-  { icon: Boxes, accent: "is-yarn", opens: "knitting" },
-  { icon: Factory, accent: "is-knitting", opens: "knitting" },
-  { icon: Droplets, accent: "is-dyeing", opens: "dyeing" },
-  { icon: Sparkles, accent: "is-compacting", opens: "compacting" },
-  { icon: Truck, accent: "is-delivery", opens: "compacting" },
-];
-
-/** "2 parties · WH-FG" — where the finished fabric went. */
-function deliverySummary(flow: FabricFlow) {
-  const parties = new Set(flow.deliveries.filter((d) => d.destination === "CUSTOMER").map((d) => d.partyName));
-  const warehouses = [...new Set(flow.deliveries.filter((d) => d.destination === "WAREHOUSE").map((d) => d.warehouse?.code))];
-  const parts = [
-    parties.size === 1 ? [...parties][0] : parties.size > 1 ? `${parties.size} parties` : null,
-    warehouses.length ? warehouses.join(", ") : null,
-  ].filter(Boolean);
-  return parts.join(" · ") || (flow.collectedAmount ? `Collected ${money(flow.collectedAmount)}` : null);
-}
+  flow.parent ? `Dyeing lot of ${flow.parent.flowNo}` : flow.yarnItemCode ? `Yarn ${flow.yarnItemCode}${flow.yarnWarehouse ? ` · ${flow.yarnWarehouse.code}` : ""}` : "Yarn purchase";
+/** A batch's origin in the list: its knitting batch for a dyeing lot, else its yarn. */
+const originOf = (flow: FabricFlow) => (flow.parent ? `Lot of ${flow.parent.flowNo}${flow.color ? ` · ${flow.color}` : ""}` : flow.yarnItemCode ? `Yarn ${flow.yarnItemCode}` : flow.yarnCount);
 
 /** Everything that happened to a batch, oldest first: its record, followed by its code. */
 function batchRecord(flow: FabricFlow) {
@@ -205,19 +251,25 @@ function batchRecord(flow: FabricFlow) {
   const add = (date: string | null, title: string, detail: (string | null | false | undefined)[], weight: number | null = null) => {
     if (date) events.push({ date, title, detail: detail.filter(Boolean).join(" · "), weight });
   };
-  add(
-    flow.purchaseDate,
-    flow.yarnItemCode ? `Yarn ${flow.yarnItemCode} taken from stock` : "Yarn purchased",
-    [flow.yarnCount, flow.yarnWarehouse?.code, flow.yarnLotNo && `lot ${flow.yarnLotNo}`, flow.yarnRatePerKg > 0 && `${money(flow.yarnRatePerKg)}/KG`],
-    flow.purchasedWeightKg,
-  );
-  if (flow.knittingDate && flow.knittingDate !== flow.knittingFinishedAt) {
+  if (flow.parent) {
+    // A dyeing lot starts with its share of the knitting batch's grey fabric.
+    add(flow.purchaseDate, `Grey fabric from ${flow.parent.flowNo}`, [flow.yarnItemCode && `yarn ${flow.yarnItemCode}`, flow.color && `to dye ${flow.color}`, flow.yarnRatePerKg > 0 && `${money(flow.yarnRatePerKg)}/KG`], flow.purchasedWeightKg);
+  } else {
+    add(
+      flow.purchaseDate,
+      flow.yarnItemCode ? `Yarn ${flow.yarnItemCode} taken from stock` : "Yarn purchased",
+      [flow.yarnCount, flow.yarnWarehouse?.code, flow.yarnLotNo && `lot ${flow.yarnLotNo}`, flow.yarnRatePerKg > 0 && `${money(flow.yarnRatePerKg)}/KG`],
+      flow.purchasedWeightKg,
+    );
+  }
+  for (const lot of flow.lots) add(lot.dyeingDate, `Dyeing lot ${lot.flowNo}`, [lot.color, lot.dyeingMillDetails, lotStage(lot).toLowerCase()], toNumber(lot.purchasedWeightKg));
+  if (!flow.parent && flow.knittingDate && flow.knittingDate !== flow.knittingFinishedAt) {
     add(flow.knittingDate, "Knitting started", [flow.knittingPartyDetails, flow.knittingMillDetails, flow.knittingExpectedFinishDate && `due ${shortDate(flow.knittingExpectedFinishDate)}`]);
   }
   add(
-    flow.knittingFinishedAt ?? (flow.dyeingDeliveryKg !== null ? flow.knittingDate : null),
+    flow.parent ? null : flow.knittingFinishedAt ?? (flow.dyeingDeliveryKg !== null ? flow.knittingDate : null),
     "Knitting finished",
-    [!!flow.knittingBagCount && `${flow.knittingBagCount} bags`, flow.knittingDeliveryPlace && `to ${flow.knittingDeliveryPlace}`, flow.knittingExpense > 0 && `charges ${money(flow.knittingExpense)}`],
+    [!!flow.knittingBagCount && `${flow.knittingBagCount} rolls`, flow.knittingDeliveryPlace && `to ${flow.knittingDeliveryPlace}`, flow.knittingExpense > 0 && `charges ${money(flow.knittingExpense)}`],
     flow.dyeingDeliveryKg,
   );
   // Dyeing and compacting are started, then completed; batches recorded in one go have only the completion.
@@ -261,7 +313,6 @@ function batchRecord(flow: FabricFlow) {
   return events.sort((a, b) => a.date.localeCompare(b.date));
 }
 
-const sum = (values: number[]) => values.reduce((total, value) => total + value, 0);
 
 export default function ProductionPage() {
   return (
@@ -273,7 +324,7 @@ export default function ProductionPage() {
 
 /**
  * The front shows every batch by code with only its yarn used and the process it is at. Opening a code
- * (`?batch=SS-2026-003`) shows its full details and stage forms; `?new=1` starts knitting a new batch.
+ * (`?batch=01SS26-KT01`) shows its full details and stage forms; `?new=1` opens the Start window over the list.
  */
 function Production() {
   const { user } = useAuth();
@@ -282,94 +333,84 @@ function Production() {
   const router = useRouter();
   const pathname = usePathname();
   // `?code=` is kept from older links.
-  const batchParam = params.get("batch") ?? params.get("code") ?? "";
+  const batchParam = (params.get("batch") ?? params.get("code") ?? "").trim();
   const starting = params.get("new") === "1";
   const recordParam = params.get("record");
 
-  const [flows, setFlows] = useState<FabricFlow[] | null>(null);
-  const [directory, setDirectory] = useState<FlowDirectory>({ dealers: [], mills: [], knittingMills: [], dyeingMills: [], compactingMills: [], yarnStocks: [], fabricStocks: [] });
-  const [loadingError, setLoadingError] = useState("");
+  // The front loads a light list (kept for the tab, so even a reload shows it at once); a batch's page loads that one
+  // batch in full.
+  const list = useApiQuery<FlowResponse>(batchParam ? null : "/production/fabric-flows?view=list", { persist: user?.id });
+  const batch = useApiQuery<FabricFlow>(batchParam ? batchPath(batchParam) : null);
+  const directoryQuery = useApiQuery<FlowDirectory>(batchParam || starting ? DIRECTORY_PATH : null);
+  const directory = directoryQuery.data ?? EMPTY_DIRECTORY;
+  // Machines and the yarn and fabric in stock (owners and admins only): only the Floor & stock tab shows them, so they
+  // load when that tab is first opened rather than with every visit to the list.
+  const [floorOpened, setFloorOpened] = useState(false);
+  const openFloor = useCallback(() => setFloorOpened(true), []);
+  const overview = useApiQuery<ProductionOverview>(batchParam || !isAdmin || !floorOpened ? null : "/production/overview");
   const [refreshing, setRefreshing] = useState(false);
+  const [updatedAt, setUpdatedAt] = useState(() => new Date());
 
-  const load = useCallback(async (manual = false) => {
-    if (manual) setRefreshing(true);
-    setLoadingError("");
-    try {
-      const [response, flowDirectory] = await Promise.all([
-        api<FlowResponse>("/production/fabric-flows"),
-        api<FlowDirectory>("/production/fabric-flows/directory"),
-      ]);
-      setFlows(response.data);
-      setDirectory(flowDirectory);
-    } catch (error) {
-      setLoadingError(error instanceof Error ? error.message : "Production batches could not be loaded");
-    } finally {
-      setRefreshing(false);
-    }
-  }, []);
-  useEffect(() => { void load(); }, [load]);
+  const { reload: reloadList } = list;
+  const { reload: reloadBatch } = batch;
+  const { reload: reloadOverview } = overview;
+  const refresh = useCallback(async () => {
+    setRefreshing(true);
+    await Promise.all([reloadList(), reloadOverview()]);
+    setUpdatedAt(new Date());
+    setRefreshing(false);
+  }, [reloadList, reloadOverview]);
+  const retryOverview = useCallback(() => void reloadOverview(), [reloadOverview]);
+  const reloadOne = useCallback(async () => {
+    await reloadBatch();
+  }, [reloadBatch]);
 
   const go = (query: Record<string, string>) => {
     const search = new URLSearchParams(query).toString();
     router.push(search ? `${pathname}?${search}` : pathname, { scroll: true });
   };
 
-  if (!flows) {
-    if (loadingError) {
-      return (
-        <div className="production-page mx-auto max-w-xl pt-12">
-          <div className="production-empty">
-            <span className="production-empty__icon text-rose-600"><AlertTriangle size={24} /></span>
-            <p className="text-lg font-bold text-gray-900">Production batches unavailable</p>
-            <p className="text-sm text-gray-500">{loadingError}</p>
-            <Button className="mt-4" onClick={() => void load(true)}><RefreshCw size={15} /> Retry</Button>
-          </div>
-        </div>
-      );
-    }
-    return <Loading />;
-  }
-
-  if (starting && isAdmin) {
-    return (
-      <StartView
-        directory={directory}
-        flows={flows}
-        onBack={() => go({})}
-        onStarted={async (flow, manualRecord) => {
-          await load();
-          go(manualRecord ? { batch: flow.flowNo, record: "knitting" } : { batch: flow.flowNo });
-        }}
-        onOpenStock={async (stock, process) => {
-          const flow = await api<FabricFlow>("/production/fabric-flows/start-stock-process", { method: "POST", body: JSON.stringify({ process, itemCode: stock.itemCode, warehouseId: stock.warehouseId, quantityKg: stock.balanceKg }) });
-          await load();
-          go({ batch: flow.flowNo, record: process });
-        }}
-      />
-    );
-  }
-
   if (batchParam) {
-    const flow = flows.find((f) => f.flowNo.toUpperCase() === batchParam.trim().toUpperCase());
-    if (!flow) {
+    if (!batch.data) {
+      if (!batch.error) return <BatchSkeleton code={batchParam.toUpperCase()} onBack={() => go({})} />;
       return (
         <div className="production-page mx-auto max-w-xl pt-12">
           <div className="production-empty">
             <span className="production-empty__icon"><Search size={24} /></span>
             <p className="text-lg font-bold text-gray-900">No batch with code {batchParam.toUpperCase()}</p>
-            <p className="text-sm text-gray-500">Check the code on the bag, or pick it from the list.</p>
-            <Button variant="outline" className="mt-4" onClick={() => go({})}><ArrowLeft size={15} /> All batches</Button>
+            <p className="text-sm text-gray-500">{batch.error}</p>
+            <div className="mt-4 flex justify-center gap-2">
+              <Button variant="outline" onClick={() => go({})}><ArrowLeft size={15} /> All batches</Button>
+              <Button variant="outline" onClick={() => void batch.reload()}><RefreshCw size={15} /> Try again</Button>
+            </div>
           </div>
         </div>
       );
     }
-    if (!isAdmin && flow.status !== "KNITTING") {
-      return <ListView flows={flows.filter((item) => item.status === "KNITTING")} refreshing={refreshing} onRefresh={() => void load(true)} onOpen={(item) => go({ batch: item.flowNo })} onStart={() => undefined} managerMode />;
-    }
-    return <BatchView key={flow.id} flow={flow} directory={directory} reload={load} onBack={() => go({})} managerMode={!isAdmin} startInStage={recordParam === "knitting" || recordParam === "dyeing" || recordParam === "compacting" ? recordParam : undefined} />;
+    return <BatchView key={batch.data.id} flow={batch.data} directory={directory} reload={reloadOne} onBack={() => go({})} managerMode={!isAdmin} startInStage={recordParam === "knitting" || recordParam === "dyeing" || recordParam === "compacting" || recordParam === "delivery" ? recordParam : undefined} />;
   }
 
-  return <ListView flows={isAdmin ? flows : flows.filter((flow) => flow.status === "KNITTING")} refreshing={refreshing} onRefresh={() => void load(true)} onOpen={(flow) => go({ batch: flow.flowNo })} onStart={() => go({ new: "1" })} managerMode={!isAdmin} />;
+  if (!list.data) {
+    if (!list.error) return <ListSkeleton />;
+    return (
+      <div className="production-page mx-auto max-w-xl pt-12">
+        <div className="production-empty">
+          <span className="production-empty__icon text-rose-600"><AlertTriangle size={24} /></span>
+          <p className="text-lg font-bold text-gray-900">Production batches unavailable</p>
+          <p className="text-sm text-gray-500">{list.error}</p>
+          <Button className="mt-4" onClick={() => void refresh()}><RefreshCw size={15} /> Retry</Button>
+        </div>
+      </div>
+    );
+  }
+  const flows = list.data.data;
+
+  return (
+    <>
+      <ListView flows={flows} overview={overview.data} overviewError={overview.error} onRetryOverview={retryOverview} onFloorOpen={openFloor} refreshing={refreshing} updatedAt={updatedAt} onRefresh={() => void refresh()} onOpen={(flow) => go({ batch: flow.flowNo })} onRecord={(flow, record) => go({ batch: flow.flowNo, record })} onStart={() => go({ new: "1" })} managerMode={!isAdmin} />
+      {starting && isAdmin && <StartDialog directory={directory} flows={flows} onClose={() => go({})} onStarted={(flow) => go({ batch: flow.flowNo })} />}
+    </>
+  );
 }
 
 /** A figure on the dark hero. */
@@ -383,145 +424,412 @@ function Glass({ label, value, note, tone }: { label: string; value: React.React
   );
 }
 
-/** The front: every batch by code, with only the yarn it used and the process it is at. */
+/** How long a batch has been at the step it is on; red once it is stuck there. */
+function StepAge({ days, stuck }: { days: number; stuck: boolean }) {
+  return (
+    <span className={cn("production-step-age", stuck && "is-stuck")} title={stuck ? `At this step over ${STUCK_DAYS} days` : "Days at this step"}>
+      <Timer size={10} aria-hidden /> {days === 0 ? "Today" : `${days}d`} at this step
+    </span>
+  );
+}
+
+/** The front's shape while the batches load for the first time in this tab. */
+function ListSkeleton() {
+  return (
+    <div className="production-page space-y-4 pb-10" role="status" aria-label="Loading production">
+      <div className="production-hero prod-head production-skeleton--hero" />
+      <div className="production-skeleton production-skeleton--row" />
+      <div className="grid grid-cols-2 gap-2 md:grid-cols-3 xl:grid-cols-6">
+        {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="production-skeleton production-skeleton--tile" />)}
+      </div>
+      <div className="production-skeleton production-skeleton--row" />
+      <div className="space-y-2">
+        {[0, 1, 2, 3, 4, 5].map((i) => <div key={i} className="production-skeleton production-skeleton--line" />)}
+      </div>
+    </div>
+  );
+}
+
+/** A batch's page while it loads: its code at once, the rest as placeholders. */
+function BatchSkeleton({ code, onBack }: { code: string; onBack: () => void }) {
+  return (
+    <div className="production-page space-y-5 pb-10" role="status" aria-label={`Loading ${code}`}>
+      <header className="production-hero">
+        <button type="button" className="production-back" onClick={onBack}><ArrowLeft size={14} /> All batches</button>
+        <h1 className="production-hero__code mt-4">{code}</h1>
+        <div className="production-hero__stats">
+          {[0, 1, 2, 3].map((i) => <div key={i} className="production-glass production-skeleton--glass" />)}
+        </div>
+      </header>
+      <div className="production-layout">
+        <div className="space-y-3">{[0, 1, 2].map((i) => <div key={i} className="production-skeleton production-skeleton--card" />)}</div>
+        <div className="production-skeleton production-skeleton--card" />
+      </div>
+    </div>
+  );
+}
+
+/** Cards shown at first, and how many more each "Show more" adds (the list can run to hundreds). */
+const PAGE = 60;
+/** How often the Floor & stock tab fetches the machines and stock again while it is on screen. */
+const FLOOR_REFRESH_MS = 2 * 60_000;
+
+/**
+ * The front, in tabs. Batches (the default, so recent production shows first): status cards (count and weight)
+ * filter it; "needs attention" picks out late knitting and fabric not yet received; then the batches as cards (60 at a
+ * time) or a table, searchable by code, yarn, fabric, colour or mill. Knitting, Dyeing and Compacting: each process's register (waiting, running, done but not sent on, done). Floor & stock: the figures for what is in
+ * process, ready and delivered, and the machines and material.
+ */
 function ListView({
   flows,
+  overview,
+  overviewError,
+  onRetryOverview,
+  onFloorOpen,
   refreshing,
+  updatedAt,
   onRefresh,
   onOpen,
+  onRecord,
   onStart,
   managerMode = false,
 }: {
   flows: FabricFlow[];
+  overview?: ProductionOverview;
+  overviewError?: string;
+  onRetryOverview: () => void;
+  /** The Floor & stock tab was opened: its machines and stock start loading. */
+  onFloorOpen: () => void;
   refreshing: boolean;
+  updatedAt: Date;
   onRefresh: () => void;
   onOpen: (flow: FabricFlow) => void;
+  /** Opens a batch with the entry window of its next step. */
+  onRecord: (flow: FabricFlow, record: CardKey) => void;
   onStart: () => void;
   managerMode?: boolean;
 }) {
+  // Batches, a register for each process (what is waiting, running, done but not sent on, and done), or Floor & stock.
+  const [view, setViewState] = useState<"batches" | StageKey | "floor">("batches");
+  const setView = (next: typeof view) => {
+    if (next === "floor") onFloorOpen();
+    setViewState(next);
+  };
   const [search, setSearch] = useState("");
-  const [filter, setFilter] = useState<Filter>("all");
+  const [layout, setLayout] = useState<"cards" | "table">("table");
+  const [filter, setFilter] = useState<Filter>("processing");
   const [listOrder, setListOrder] = useState<ListOrder>("date");
+  const [attention, setAttention] = useState<"" | "late" | "waiting" | "stuck">("");
+  const [limit, setLimit] = useState(PAGE);
   const q = search.trim().toUpperCase();
-  const counts = useMemo(() => {
-    const result: Record<Filter, number> = { all: flows.length, processing: 0, knitting: 0, dyeing: 0, compacting: 0, delivering: 0, completed: 0 };
+  const today = localDate();
+  const month = today.slice(0, 7);
+
+  // One pass over the batches for every count and total on the page.
+  const stats = useMemo(() => {
+    const counts: Record<Filter, number> = { all: flows.length, processing: 0, knitting: 0, dyeing: 0, compacting: 0, completed: 0 };
+    const weights: Record<Filter, number> = { all: 0, processing: 0, knitting: 0, dyeing: 0, compacting: 0, completed: 0 };
+    const late: FabricFlow[] = [];
+    const waiting: FabricFlow[] = [];
+    const stuck: FabricFlow[] = [];
+    let deliveredMonth = 0;
+    let costInProcess = 0;
     for (const flow of flows) {
-      result[progressFilter[progressOf(flow)]]++;
-      if (progressOf(flow) < 4) result.processing++;
+      const step = progressOf(flow);
+      const key = progressFilter[step];
+      const weight = flow.metrics.currentWeightKg;
+      counts[key]++;
+      weights[key] += weight;
+      weights.all += weight;
+      if (step < 3) {
+        counts.processing++;
+        weights.processing += weight;
+        costInProcess += flow.metrics.totalSpent;
+      }
+      if (isKnitting(flow) && flow.knittingExpectedFinishDate && flow.knittingExpectedFinishDate.slice(0, 10) < today) late.push(flow);
+      if ([...flow.processDeliveries, ...flow.deliveries].some((d) => d.destination === "WAREHOUSE" && !d.receivedAt)) waiting.push(flow);
+      if (isStuck(flow)) stuck.push(flow);
+      // By the date on this calendar: a delivery made after midnight is that day's, not the day before's (UTC).
+      for (const d of flow.deliveries) if (dayOf(d.deliveredAt).slice(0, 7) === month) deliveredMonth += toNumber(d.weightKg);
     }
-    return result;
-  }, [flows]);
+    // The longest waiting first.
+    stuck.sort((a, b) => (daysInStep(b) ?? 0) - (daysInStep(a) ?? 0));
+    return { counts, weights, late, waiting, stuck, deliveredMonth, costInProcess };
+  }, [flows, today, month]);
+
   const visible = useMemo(() => {
-    const filtered = flows.filter(
-        (f) =>
-          inFilter(f, filter) &&
-          (!q || f.flowNo.toUpperCase().includes(q) || f.yarnItemCode?.toUpperCase().includes(q)),
-      );
-    return filtered.sort((a, b) => {
+    const pool = attention ? stats[attention] : flows.filter((f) => inFilter(f, filter));
+    // A code, yarn, fabric or colour, any mill or party it went to, or one of its dyeing lots.
+    const filtered = q
+      ? pool.filter((f) =>
+          [
+            f.flowNo, f.yarnItemCode, f.yarnCount, f.fabricType, f.color,
+            f.knittingMillDetails, f.dyeingMillDetails, f.compactingMillDetails,
+            f.knittingPartyDetails, f.dyeingPartyDetails, f.compactingPartyDetails,
+            ...f.deliveries.map((d) => d.partyName),
+            ...f.lots.flatMap((lot) => [lot.flowNo, lot.color]),
+          ].some((v) => v?.toUpperCase().includes(q)),
+        )
+      : pool;
+    // The stuck list stays longest waiting first unless another order is picked.
+    if (attention === "stuck" && listOrder === "date") return filtered;
+    return [...filtered].sort((a, b) => {
       if (listOrder === "code") return a.flowNo.localeCompare(b.flowNo, undefined, { numeric: true });
       if (listOrder === "process") return progressOf(a) - progressOf(b) || a.flowNo.localeCompare(b.flowNo, undefined, { numeric: true });
       return b.purchaseDate.localeCompare(a.purchaseDate) || b.flowNo.localeCompare(a.flowNo, undefined, { numeric: true });
     });
-  }, [flows, filter, q, listOrder]);
-  const active = flows.filter((f) => progressOf(f) < 4);
+  }, [flows, filter, q, listOrder, attention, stats]);
+  const shown = visible.slice(0, limit);
+  const out = useMemo(() => materialOut(flows), [flows]);
+  // What is pending or running at each process, for its tab.
+  const openAt = useMemo(
+    () => Object.fromEntries(stages.map(({ key }) => [key, processRecords(flows, key).filter((r) => r.state !== "SENT").length])) as Record<StageKey, number>,
+    [flows],
+  );
+  useEffect(() => {
+    if (view !== "floor") return;
+    const timer = setInterval(() => {
+      if (document.visibilityState === "visible") onRetryOverview();
+    }, FLOOR_REFRESH_MS);
+    return () => clearInterval(timer);
+  }, [view, onRetryOverview]);
   const shownFilter = filters.find((f) => f.key === filter)!;
+  const pick = (next: Filter) => {
+    setFilter(next);
+    setAttention("");
+    setLimit(PAGE);
+  };
 
   return (
-    <div className="production-page space-y-5 pb-10">
-      <header className="production-hero">
-        <div className="flex flex-wrap items-start justify-between gap-4">
-          <div className="min-w-0">
-            <p className="production-eyebrow">{managerMode ? "Assigned knitting work" : "Yarn · Knitting · Dyeing · Compacting · Delivery"}</p>
-            <h1 className="production-hero__title">{managerMode ? "Knitting tasks" : "Production"}</h1>
-            <p className="mt-1 max-w-xl text-sm text-white/65">{managerMode ? "Open a task to see its machine, yarn code and required weight, then complete it with the finished weight." : "Every batch keeps its item code from the yarn to the last delivery. Open a code to see everything that happened to it."}</p>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="ghost" className="production-ghost" disabled={refreshing} onClick={onRefresh}><RefreshCw size={15} className={refreshing ? "animate-spin" : ""} /> Refresh</Button>
-            {!managerMode && <Button className="production-cta" onClick={onStart}><Play size={15} /> Start</Button>}
-          </div>
+    <div className="production-page space-y-4 pb-10">
+      <header className="production-hero prod-head">
+        <div className="min-w-0">
+          <p className="production-eyebrow"><span className="prod-live" aria-hidden /> {managerMode ? "Assigned knitting work" : "Yarn → knitting → dyeing → compacting → delivery"}</p>
+          <h1 className="production-hero__title">{managerMode ? "Knitting tasks" : "Production"}</h1>
+          <p className="mt-1 max-w-xl text-sm text-white/65">{managerMode ? "Open a task to see its machines and yarn, then finish it with the yarn used and the grey fabric." : "Every batch keeps its code from the yarn to the last delivery. Start a process, complete it with what was used and its cost, and each hand-off gets a delivery challan."}</p>
         </div>
-        <div className="production-hero__stats">
-          <Glass label="Batches" value={flows.length} note={`${active.length} in progress`} />
-          <Glass label="Yarn in process" value={kg(sum(active.map((f) => f.purchasedWeightKg)))} note="Batches still processing" />
-          {!managerMode && <Glass label="Ready to deliver" value={kg(sum(flows.map((f) => leftToDeliver(f) ?? 0)))} note="Compacted, not yet delivered" />}
-          {!managerMode && <Glass label="Delivered" value={kg(sum(flows.map((f) => f.finalDeliveredKg ?? 0)))} note="To parties and warehouses" />}
+        {!managerMode && view === "floor" && <FloorClock />}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button variant="ghost" className="production-ghost" disabled={refreshing} onClick={onRefresh} title="Refresh the list">
+            <RefreshCw size={15} className={refreshing ? "animate-spin" : ""} /> {updatedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+          </Button>
+          {!managerMode && <Button className="production-cta" onClick={onStart}><Play size={15} /> Start a process</Button>}
         </div>
       </header>
 
-      {!managerMode && <nav className="production-pipeline" aria-label="Show batches by process">
-        {filters.map(({ key, label, icon: Icon, accent }) => (
-          <button key={key} type="button" aria-pressed={filter === key} className={cn("production-filter", accent)} onClick={() => setFilter(key)}>
-            <span className="production-filter__icon"><Icon size={17} /></span>
-            <span className="min-w-0">
-              <span className="production-filter__count">{counts[key]}</span>
-              <span className="production-filter__label">{label}</span>
-            </span>
+      {!managerMode && (
+        <div className="production-order pviews" role="tablist" aria-label="Production view">
+          <button type="button" role="tab" aria-selected={view === "batches"} onClick={() => setView("batches")}>
+            <Layers size={15} /> Batches <span className="pviews__count">{stats.counts.processing} in process</span>
           </button>
-        ))}
-      </nav>}
-
-      <div className="production-list-tools">
-        <form
-          className="production-search"
-          onSubmit={(event) => {
-            event.preventDefault();
-            if (visible.length === 1) onOpen(visible[0]);
-          }}
-        >
-          <Search size={17} aria-hidden />
-          <Input placeholder="Find a code, e.g. SS-2026-003" aria-label="Find a batch code" value={search} onChange={(e) => setSearch(e.target.value)} autoComplete="off" spellCheck={false} />
-        </form>
-        <div className="production-order" role="group" aria-label="Arrange production batches">
-          <button type="button" aria-pressed={listOrder === "date"} onClick={() => setListOrder("date")}><CalendarDays size={15} /> Date-wise</button>
-          <button type="button" aria-pressed={listOrder === "code"} onClick={() => setListOrder("code")}><Hash size={15} /> Code-wise</button>
-          <button type="button" aria-pressed={listOrder === "process"} onClick={() => setListOrder("process")}><ListOrdered size={15} /> Process order</button>
+          {stages.map(({ key, label, icon: Icon }) => (
+            <button key={key} type="button" role="tab" aria-selected={view === key} onClick={() => setView(key)}>
+              <Icon size={15} /> {label}{openAt[key] ? <span className="pviews__count">{openAt[key]} open</span> : null}
+            </button>
+          ))}
+          <button type="button" role="tab" aria-selected={view === "floor"} onClick={() => setView("floor")}>
+            <Factory size={15} /> Floor &amp; stock{overview ? <span className="pviews__count">{overview.machines.running.length} knitting</span> : null}
+          </button>
         </div>
-        <p className="text-sm text-gray-500">
-          {visible.length} {visible.length === 1 ? "batch" : "batches"}{filter !== "all" && <> · {shownFilter.label}</>}
-        </p>
-      </div>
+      )}
 
-      {visible.length === 0 ? (
-        <div className="production-empty">
-          <span className="production-empty__icon">{flows.length ? <Search size={24} /> : <Factory size={24} />}</span>
-          <p className="text-base font-bold text-gray-900">{!flows.length ? "No batches yet" : q ? `No batch matches ${q}` : `No batches ${shownFilter.label.toLowerCase()}`}</p>
-          <p className="text-sm text-gray-500">{flows.length ? "Check the material code, or show all batches." : "Start a process with yarn or fabric from a warehouse."}</p>
-          {flows.length ? (
-            <Button variant="outline" className="mt-3" onClick={() => { setSearch(""); setFilter("all"); }}>Show all batches</Button>
-          ) : !managerMode ? (
-            <Button className="mt-3" onClick={onStart}><Play size={15} /> Start</Button>
-          ) : null}
-        </div>
-      ) : (
-        <div className="production-ledger">
-          <div className="production-ledger__head" aria-hidden>
-            <span>Date</span><span>Batch / yarn code</span><span>Yarn used</span><span>Current process</span><span>Progress</span><span />
+      {!managerMode && view === "floor" && (
+        <>
+          <div className="pkpis">
+            <div><p>In process</p><strong>{stats.counts.processing}</strong><span>{kg(stats.weights.processing)} of fabric and yarn</span></div>
+            <div><p>At knitting</p><strong>{stats.counts.knitting}</strong><span>{kg(stats.weights.knitting)} · yarn in hand or on machines</span></div>
+            <div><p>Delivered this month</p><strong>{kg(stats.deliveredMonth)}</strong><span>to parties and warehouses</span></div>
+            <div><p>Cost in process</p><strong>{money(stats.costInProcess)}</strong><span>yarn, processes and other costs</span></div>
           </div>
-          {visible.map((flow) => <BatchRow key={flow.id} flow={flow} onOpen={() => onOpen(flow)} />)}
-        </div>
+          <Figures overview={overview} out={out} />
+          <DailyKnitting overview={overview} error={overviewError} onRetry={onRetryOverview} />
+          <MachinesSection overview={overview} error={overviewError} onRetry={onRetryOverview} />
+          <StockSection overview={overview} error={overviewError} onRetry={onRetryOverview} out={out} />
+          <FabricSection out={out} loading={false} />
+        </>
+      )}
+
+      {!managerMode && (view === "knitting" || view === "dyeing" || view === "compacting") && (
+        <ProcessRegister key={view} flows={flows} stage={view} onOpen={onOpen} onRecord={onRecord} />
+      )}
+
+      {(managerMode || view === "batches") && (
+        <>
+          {!managerMode && (
+            <nav className="pstates" aria-label="Show batches by process">
+              {filters.map(({ key, label, icon: Icon, accent }) => (
+                <button key={key} type="button" aria-pressed={filter === key && !attention} className={cn("pstate", accent)} onClick={() => pick(key)}>
+                  <span className="pstate__label"><Icon size={14} aria-hidden /> {label}</span>
+                  <strong>{stats.counts[key]}</strong>
+                  <span className="pstate__note">{stats.weights[key] > 0 ? kg(stats.weights[key]) : "—"}</span>
+                </button>
+              ))}
+            </nav>
+          )}
+
+          {(stats.late.length > 0 || stats.waiting.length > 0 || stats.stuck.length > 0) && (
+            <div className="pattention" role="status">
+              <AlertTriangle size={17} aria-hidden />
+              <span className="font-semibold">Needs attention:</span>
+              {/* Each with what it is about (machines, the warehouse, production) as on the Dashboard; late and stuck are urgent. */}
+              {([
+                ["late", stats.late.length, "knitting past due", "machines", Factory, true],
+                ["waiting", stats.waiting.length, "waiting to be received in a warehouse", "warehouse", Warehouse, false],
+                ["stuck", stats.stuck.length, `at the same step over ${STUCK_DAYS} days`, "production", Timer, true],
+              ] as const).map(([key, count, text, kind, Icon, urgent]) => count > 0 && (
+                <button key={key} type="button" className={cn(urgent && "is-urgent")} aria-pressed={attention === key} onClick={() => { setAttention(attention === key ? "" : key); setLimit(PAGE); }} title={ATTENTION_KINDS[kind].label}>
+                  <span className={cn("attn-icon is-sm", `is-${kind}`, urgent && "is-urgent")}><Icon size={12} /></span>
+                  {count} {text}
+                </button>
+              ))}
+            </div>
+          )}
+
+          <div className="production-list-tools">
+            <form
+              className="production-search"
+              onSubmit={(event) => {
+                event.preventDefault();
+                const exact = visible.find((f) => f.flowNo.toUpperCase() === q);
+                if (exact ?? visible.length === 1) onOpen(exact ?? visible[0]);
+              }}
+            >
+              <Search size={17} aria-hidden />
+              <Input placeholder="Find a code, yarn, fabric, colour or mill (Enter opens it)" aria-label="Find a batch" value={search} onChange={(e) => { setSearch(e.target.value); setLimit(PAGE); }} autoComplete="off" spellCheck={false} />
+            </form>
+            <div className="production-order" role="group" aria-label="Arrange production batches">
+              <button type="button" aria-pressed={listOrder === "date"} onClick={() => setListOrder("date")}><CalendarDays size={15} /> Newest</button>
+              <button type="button" aria-pressed={listOrder === "code"} onClick={() => setListOrder("code")}><Hash size={15} /> Code</button>
+              <button type="button" aria-pressed={listOrder === "process"} onClick={() => setListOrder("process")}><ListOrdered size={15} /> Process</button>
+            </div>
+            <div className="production-order" role="group" aria-label="Show as">
+              <button type="button" aria-pressed={layout === "cards"} onClick={() => setLayout("cards")}><Layers size={15} /> Cards</button>
+              <button type="button" aria-pressed={layout === "table"} onClick={() => setLayout("table")}><ListOrdered size={15} /> Table</button>
+            </div>
+            <p className="text-sm text-gray-500">
+              {visible.length} {visible.length === 1 ? "batch" : "batches"} · {attention === "late" ? "knitting past due" : attention === "waiting" ? "waiting to be received" : attention === "stuck" ? `same step over ${STUCK_DAYS} days` : shownFilter.label.toLowerCase()}
+            </p>
+          </div>
+
+          {visible.length === 0 ? (
+            <div className="production-empty">
+              <span className="production-empty__icon">{flows.length ? <Search size={24} /> : <Factory size={24} />}</span>
+              <p className="text-base font-bold text-gray-900">{!flows.length ? "No batches yet" : q ? `No batch matches ${search.trim()}` : `No batches ${shownFilter.label.toLowerCase()}`}</p>
+              <p className="text-sm text-gray-500">{flows.length ? "Check the code, or show all batches." : "Start a process with yarn or fabric from a warehouse."}</p>
+              {flows.length ? (
+                <Button variant="outline" className="mt-3" onClick={() => { setSearch(""); pick("all"); }}>Show all batches</Button>
+              ) : !managerMode ? (
+                <Button className="mt-3" onClick={onStart}><Play size={15} /> Start a process</Button>
+              ) : null}
+            </div>
+          ) : layout === "cards" ? (
+            <div className="batch-tiles">
+              {shown.map((flow) => <BatchTile key={flow.id} flow={flow} managerMode={managerMode} onOpen={() => onOpen(flow)} onRecord={(record) => onRecord(flow, record)} onIntent={() => prefetchBatch(flow)} />)}
+            </div>
+          ) : (
+            <div className="production-ledger">
+              <div className="production-ledger__head" aria-hidden>
+                <span>Date</span><span>Batch / yarn code</span><span>Yarn used</span><span>Current process</span><span>Progress</span><span />
+              </div>
+              {shown.map((flow) => <BatchRow key={flow.id} flow={flow} onOpen={() => onOpen(flow)} onIntent={() => prefetchBatch(flow)} />)}
+            </div>
+          )}
+          {visible.length > shown.length && (
+            <div className="flex justify-center">
+              <Button variant="outline" onClick={() => setLimit((n) => n + PAGE)}>Show {Math.min(PAGE, visible.length - shown.length)} more of {visible.length - shown.length}</Button>
+            </div>
+          )}
+        </>
       )}
     </div>
   );
 }
 
-const railSteps = ["Knit", "Dye", "Compact", "Deliver"];
+const railSteps = ["Knit", "Dye", "Compact"];
+
+/** The entry a batch's next step opens: its process, or the deliveries once it is compacted. */
+const nextRecord = (flow: FabricFlow): CardKey | null => {
+  const next = whereIs(flow).next;
+  return next === "compacting" && flow.officeDeliveryKg !== null ? "delivery" : next;
+};
+
+/**
+ * A batch as a card: its code, yarn and fabric, where it is now, its progress, the weights and cost so far, and the
+ * button for its next step (which opens that entry straight away).
+ */
+function BatchTile({ flow, managerMode, onOpen, onRecord, onIntent }: { flow: FabricFlow; managerMode: boolean; onOpen: () => void; onRecord: (record: CardKey) => void; onIntent: () => void }) {
+  const where = whereIs(flow);
+  const step = progressOf(flow);
+  const ended = endedStep(flow);
+  const railDone = ended ?? step;
+  const railNow = ended === null ? step : -1;
+  const next = nextRecord(flow);
+  const fabric = [flow.fabricType, flow.fabricDiameter && `${flow.fabricDiameter} dia`, gsmText(flow.fabricGsm), flow.color].filter(Boolean).join(" · ");
+  const challans = (flow.challans ?? []).filter((c) => !c.cancelledAt).length;
+  const inStep = daysInStep(flow);
+  return (
+    <article className={cn("batch-tile", progressAccent[step])} onPointerEnter={onIntent} onFocus={onIntent}>
+      <button type="button" className="batch-tile__main" onClick={onOpen} aria-label={`Open ${flow.flowNo}`}>
+        <span className="flex items-start justify-between gap-2">
+          <span className="min-w-0">
+            <strong className="batch-tile__code">{flow.flowNo}</strong>
+            <span className="batch-tile__sub">{originOf(flow)} · {shortDate(flow.purchaseDate)}</span>
+            {inStep !== null && <StepAge days={inStep} stuck={isStuck(flow)} />}
+          </span>
+          <Pill tone={where.tone} live={processRunning(flow)}>{where.label}</Pill>
+        </span>
+        {fabric && <span className="batch-tile__fabric">{fabric}</span>}
+        <span className="batch-tile__place">{where.place}</span>
+        <span className="production-rail">{railSteps.map((s, i) => <span key={s} className={cn(i < railDone && "is-done", i === railNow && "is-now")} />)}</span>
+        <span className="batch-tile__nums">
+          <span><small>{flow.parent ? "Grey fabric" : isKnitting(flow) ? "Yarn given" : "Yarn used"}</small>{kg(flow.purchasedWeightKg)}</span>
+          <span><small>Weight now</small>{kg(flow.metrics.currentWeightKg)}</span>
+          {!managerMode && <span><small>Cost so far</small>{money(flow.metrics.totalSpent)}</span>}
+        </span>
+      </button>
+      <span className="batch-tile__foot">
+        <span className="text-[11px] text-gray-500">{challans ? `${challans} delivery challan${challans === 1 ? "" : "s"}` : "No challan yet"}</span>
+        {next && where.action ? (
+          <Button size="sm" className="batch-tile__cta" onClick={() => onRecord(next)}>{where.action} <ArrowRight size={14} /></Button>
+        ) : (
+          <Button size="sm" variant="outline" onClick={onOpen}>Open <ArrowRight size={14} /></Button>
+        )}
+      </span>
+    </article>
+  );
+}
 
 /** A compact ledger row: easier to scan than cards and still shows the full process position. */
-function BatchRow({ flow, onOpen }: { flow: FabricFlow; onOpen: () => void }) {
+function BatchRow({ flow, onOpen, onIntent }: { flow: FabricFlow; onOpen: () => void; onIntent: () => void }) {
   const where = whereIs(flow);
   const step = progressOf(flow);
   // A batch that ended in a warehouse went only as far as that process; later rail steps stay empty.
   const ended = endedStep(flow);
   const railDone = ended ?? step;
   const railNow = ended === null ? step : -1;
+  const inStep = daysInStep(flow);
+  const change = flow.metrics.currentWeightKg - flow.purchasedWeightKg;
   return (
-    <button type="button" className={cn("production-ledger__row", progressAccent[step])} onClick={onOpen} aria-label={`${flow.flowNo}: ${kg(flow.purchasedWeightKg)} yarn used, ${where.label}`}>
-      <span className="production-ledger__date"><small>Started</small>{shortDate(flow.purchaseDate)}</span>
+    <button type="button" className={cn("production-ledger__row", progressAccent[step])} onClick={onOpen} onPointerEnter={onIntent} onFocus={onIntent} aria-label={`${flow.flowNo}: ${kg(flow.purchasedWeightKg)} yarn used, ${where.label}`}>
+      <span className="production-ledger__date">
+        <small>Started</small>{shortDate(flow.purchaseDate)}
+        {inStep !== null && <StepAge days={inStep} stuck={isStuck(flow)} />}
+      </span>
       <span className="production-ledger__identity">
         <strong>{flow.flowNo}</strong>
-        <small>{flow.yarnItemCode ? `Yarn ${flow.yarnItemCode}` : flow.yarnCount}</small>
+        <small>{originOf(flow)}</small>
       </span>
-      <span className="production-ledger__weight"><small>Yarn used</small>{kg(flow.purchasedWeightKg)}</span>
+      <span className="production-ledger__weight">
+        <small>{flow.parent ? "Grey fabric" : isKnitting(flow) ? "Yarn given" : "Yarn used"}</small>{kg(flow.purchasedWeightKg)}
+        {/* In process after knitting: the weight now against what went in (a batch split into dyeing lots, or one
+            already delivered, no longer holds its whole weight, so it would read as a loss). */}
+        {inStep !== null && !isKnitting(flow) && flow.status !== "PURCHASED" && flow.lots.length === 0 && (
+          <span className="production-ledger__now">
+            now {kg(flow.metrics.currentWeightKg)}
+            {Math.abs(change) > 0.0005 && flow.purchasedWeightKg > 0 && <b className={change < 0 ? "is-loss" : "is-gain"}>{change < 0 ? "−" : "+"}{((Math.abs(change) / flow.purchasedWeightKg) * 100).toFixed(1)}%</b>}
+          </span>
+        )}
+      </span>
       <span className="production-ledger__status"><Pill tone={where.tone} live={processRunning(flow)}>{where.label}</Pill><small>{where.place}</small></span>
       <span className="production-ledger__progress" aria-hidden>
         <span className="production-rail">{railSteps.map((s, i) => <span key={s} className={cn(i < railDone && "is-done", i === railNow && "is-now")} />)}</span>
@@ -532,316 +840,49 @@ function BatchRow({ flow, onOpen }: { flow: FabricFlow; onOpen: () => void }) {
   );
 }
 
-const startProcesses = [
-  { key: "knitting" as const, label: "Knitting", material: "yarn", icon: Factory, text: "Knit yarn into grey fabric" },
-  { key: "dyeing" as const, label: "Dyeing", material: "grey fabric", icon: Droplets, text: "Dye grey fabric from stock" },
-  { key: "compacting" as const, label: "Compacting", material: "dyed fabric", icon: Sparkles, text: "Compact dyed fabric from stock" },
-];
-
-/**
- * Starting a new batch, one step at a time: the warehouse and process, the stock to use, (knitting only) the
- * fabric and mill, then a read-back to check before anything is saved.
- */
-function StartView({ directory, flows, onBack, onStarted, onOpenStock }: { directory: FlowDirectory; flows: FabricFlow[]; onBack: () => void; onStarted: (flow: FabricFlow, manualRecord: boolean) => Promise<void>; onOpenStock: (stock: StartStock, process: "dyeing" | "compacting") => Promise<void> }) {
-  const [saving, setSaving] = useState(false);
-  const [error, setError] = useState("");
-  const [process, setProcess] = useState<ProcessStart>("knitting");
-  const [step, setStep] = useState(0);
-  const [stockCode, setStockCode] = useState("");
-  // One warehouse and search for every process: switching process keeps the warehouse, and each process shows what it has there.
-  const [scopeWarehouseId, setScopeWarehouseId] = useState("");
-  const [scopeSearch, setScopeSearch] = useState("");
-  const stockScope: StockScope = { warehouseId: scopeWarehouseId, search: scopeSearch, setWarehouseId: setScopeWarehouseId };
-  const yarnQuery = useApiQuery<StartStock[]>(`/inventory/balances${qs({ category: "YARN" })}`);
-  const greyQuery = useApiQuery<StartStock[]>(`/inventory/balances${qs({ category: "GREY_FABRIC" })}`);
-  const dyedQuery = useApiQuery<StartStock[]>(`/inventory/balances${qs({ category: "DYED_FABRIC" })}`);
-  const { data: startWarehouses = [] } = useApiQuery<Warehouse[]>("/masters/warehouses");
-  const activeStartWarehouses = startWarehouses.filter((warehouse) => warehouse.active !== false);
-  const startWarehouseById = new Map(startWarehouses.map((warehouse) => [warehouse.id, warehouse]));
-  const processKey = (row: StartStock) => `${row.itemCode}|${row.warehouseId}`;
-  const flowByCode = new Map(flows.map((flow) => [flow.flowNo, flow]));
-  const usable = (row: StartStock) => row.unit === "KG" && row.balanceKg > 0.0005 && startWarehouseById.get(row.warehouseId)?.active !== false;
-  const stockFor: Record<ProcessStart, StartStock[]> = {
-    knitting: (yarnQuery.data ?? []).filter(usable),
-    dyeing: (greyQuery.data ?? []).filter((row) => {
-      const flow = flowByCode.get(row.itemCode);
-      return usable(row) && !!flow && flow.knittingFinishedAt !== null && !flow.dyeingIssueTxnId;
-    }),
-    compacting: (dyedQuery.data ?? []).filter((row) => {
-      const flow = flowByCode.get(row.itemCode);
-      return usable(row) && !!flow && flow.dyeingOutputWeightKg !== null && !flow.compactingIssueTxnId;
-    }),
-  };
-  const stockLoaded: Record<ProcessStart, boolean> = { knitting: !!yarnQuery.data, dyeing: !!greyQuery.data, compacting: !!dyedQuery.data };
-  /** What a process could start with in the chosen warehouse (or all of them). */
-  const inScope = (key: ProcessStart) => stockFor[key].filter((row) => !scopeWarehouseId || row.warehouseId === scopeWarehouseId);
-  const availableProcessStock = process === "knitting" ? [] : stockFor[process];
-  const selectedProcessStock = availableProcessStock.find((row) => processKey(row) === stockCode);
-  const scopeWarehouse = startWarehouseById.get(scopeWarehouseId);
-  const where = scopeWarehouse ? scopeWarehouse.code : "all warehouses";
-  const chosenProcess = startProcesses.find((item) => item.key === process)!;
-  const material = chosenProcess.material;
-  const steps = process === "knitting" ? ["Warehouse & process", "Yarn", "Fabric & mill", "Confirm"] : ["Warehouse & process", material[0].toUpperCase() + material.slice(1), "Confirm"];
-  const lastStep = steps.length - 1;
-  const head =
-    step === 0
-      ? { title: "Where from, and which process?", caption: "The warehouse counts for every process; each one shows the stock it can start with there." }
-      : step === lastStep
-        ? { title: "Check and start", caption: "Everything chosen so far. Go back to change anything; nothing is saved until you start." }
-        : step === 1
-          ? { title: `Pick the ${material}`, caption: process === "knitting" ? `Yarn in ${where}; the KG used is taken out of that warehouse.` : `${material[0].toUpperCase() + material.slice(1)} in ${where}; the whole stock of the code goes to ${process}.` }
-          : { title: "Fabric and mill", caption: "What to make from the yarn, where it is knitted and when." };
-
-  const go = (next: number) => {
-    setError("");
-    setStep(next);
-    window.scrollTo({ top: 0, behavior: "smooth" });
-  };
-  const run: RunStage = async (action, _next, manualRecord = false) => {
-    setSaving(true);
-    setError("");
-    try {
-      const flow = await action();
-      toast.success(
-        manualRecord
-          ? `Batch ${flow.flowNo} created. Enter the other mill's knitting record now.`
-          : `Knitting task ${flow.flowNo} created: ${kg(flow.purchasedWeightKg)} of ${flow.yarnItemCode ?? "yarn"} assigned from stock.`,
-        manualRecord ? "Ready for manual record" : "Task created",
-      );
-      await onStarted(flow, manualRecord);
-      return true;
-    } catch (e) {
-      setError(e instanceof Error ? e.message : "Could not start knitting");
-      return false;
-    } finally {
-      setSaving(false);
-    }
-  };
-  const startStock = async () => {
-    if (!selectedProcessStock || process === "knitting") return;
-    setSaving(true);
-    setError("");
-    try {
-      await onOpenStock(selectedProcessStock, process);
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : `Could not start ${process}`);
-      setSaving(false);
-    }
-  };
-  const ProcessIcon = chosenProcess.icon;
-  const shownCount = inScope(process);
-
-  return (
-    <div className={cn("production-page start-wizard pb-10", `is-${process}`)}>
-      <aside className="start-wizard__side">
-        <button type="button" className="start-wizard__back" onClick={onBack}><ArrowLeft size={14} /> All batches</button>
-        <p className="start-wizard__eyebrow">New batch</p>
-        <h1 className="start-wizard__title">Start production</h1>
-        <WizardSteps steps={steps} current={step} onJump={go} />
-        <div className="start-wizard__picked" aria-label="Chosen so far">
-          <button type="button" disabled={step === 0} onClick={() => go(0)} title="Change the warehouse">
-            <WarehouseIcon size={16} aria-hidden />
-            <span><small>Warehouse</small>{scopeWarehouse ? `${scopeWarehouse.code} · ${scopeWarehouse.name}` : "All warehouses"}</span>
-          </button>
-          <button type="button" disabled={step === 0} onClick={() => go(0)} title="Change the process">
-            <ProcessIcon size={16} aria-hidden />
-            <span><small>Process</small>{chosenProcess.label}</span>
-          </button>
-        </div>
-      </aside>
-
-      <div className="start-wizard__main">
-        {error && <div className="flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle size={17} />{error}</div>}
-
-        <section className="start-wizard__panel">
-          <div className="start-wizard__head">
-            <div className="min-w-0">
-              <p className="start-wizard__count">Step {step + 1} of {steps.length}</p>
-              <h2>{head.title}</h2>
-              <p>{head.caption}</p>
-            </div>
-            {step === 1 && (
-              <label className="start-wizard__search">
-                <span className="sr-only">Search {material} code</span>
-                <span className="stock-pick__control">
-                  <Search size={15} className="text-gray-400" aria-hidden />
-                  <Input value={scopeSearch} placeholder={`Search ${material} code`} autoComplete="off" spellCheck={false} onChange={(e) => setScopeSearch(e.target.value)} />
-                </span>
-              </label>
-            )}
-          </div>
-
-          <div className="start-wizard__body">
-            {step === 0 && (
-              <>
-                <Field label="Warehouse" hint={`${activeStartWarehouses.length} active`} className="max-w-xl">
-                  <span className="stock-pick__control">
-                    <WarehouseIcon size={15} className="text-gray-400" aria-hidden />
-                    <select className="erp-input" value={scopeWarehouseId} onChange={(e) => { setScopeWarehouseId(e.target.value); setStockCode(""); }}>
-                      <option value="">All warehouses</option>
-                      {activeStartWarehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.code} · {warehouse.name}</option>)}
-                    </select>
-                  </span>
-                </Field>
-                <p className="mb-2 mt-6 text-[10px] font-extrabold uppercase tracking-[.12em] text-gray-500">Process</p>
-                <div className="start-wizard__processes" role="radiogroup" aria-label="Process to start">
-                  {startProcesses.map(({ key, label, material: stockMaterial, icon: Icon, text }) => {
-                    const rows = inScope(key);
-                    return (
-                      <button
-                        key={key}
-                        type="button"
-                        role="radio"
-                        aria-checked={process === key}
-                        className={cn("start-wizard__process", `is-${key}`)}
-                        onClick={() => {
-                          if (key === process) return;
-                          setProcess(key);
-                          setStockCode("");
-                          setScopeSearch("");
-                        }}
-                      >
-                        <span className="start-wizard__process-icon"><Icon size={20} /></span>
-                        <span className="block text-base font-extrabold text-gray-900">{label}</span>
-                        <span className="block text-xs text-gray-500">{text}</span>
-                        <span className={cn("start-wizard__stock", rows.length > 0 && "has-stock")}>
-                          {!stockLoaded[key]
-                            ? "Loading stock…"
-                            : rows.length
-                              ? `${plural(new Set(rows.map((row) => row.itemCode)).size, "code")} · ${kg(rows.reduce((total, row) => total + row.balanceKg, 0))}`
-                              : `No ${stockMaterial} in ${where}`}
-                        </span>
-                      </button>
-                    );
-                  })}
-                </div>
-                <WizardNav
-                  onNext={() => go(1)}
-                  disabled={stockLoaded[process] && !shownCount.length}
-                  hint={!stockLoaded[process] ? "Loading stock…" : shownCount.length ? `${chosenProcess.label} from ${where}.` : `No ${material} in ${where}: choose another warehouse or process.`}
-                />
-              </>
-            )}
-
-            {process === "knitting" ? (
-              <StartKnitting directory={directory} saving={saving} run={run} stockScope={stockScope} step={step} onStep={go} />
-            ) : step === 1 ? (
-              <>
-                <StockPicker
-                  rows={availableProcessStock}
-                  warehouses={startWarehouses}
-                  material={material}
-                  loading={!stockLoaded[process]}
-                  selectedKey={stockCode}
-                  keyOf={processKey}
-                  onSelect={(row) => setStockCode(row ? processKey(row) : "")}
-                  scope={stockScope}
-                />
-                <WizardNav
-                  onBack={() => go(0)}
-                  onNext={() => go(2)}
-                  disabled={!selectedProcessStock}
-                  hint={selectedProcessStock ? `${selectedProcessStock.itemCode} · ${kg(selectedProcessStock.balanceKg)} goes to ${process}.` : `Pick the ${material} to start ${process} with.`}
-                />
-              </>
-            ) : step === 2 && selectedProcessStock ? (
-              <>
-                <WizardSummary
-                  groups={[
-                    {
-                      title: `${material[0].toUpperCase() + material.slice(1)} from stock`,
-                      rows: [
-                        ["Code", <span key="code" className="font-mono">{selectedProcessStock.itemCode}</span>],
-                        ["Item", selectedProcessStock.itemName],
-                        ["Warehouse", startWarehouseById.get(selectedProcessStock.warehouseId)?.code],
-                        ["KG", `${kg(selectedProcessStock.balanceKg)} · the whole stock`],
-                      ],
-                    },
-                    {
-                      title: chosenProcess.label,
-                      rows: [
-                        ["Batch", flowByCode.get(selectedProcessStock.itemCode)?.flowNo],
-                        ["After start", `The ${process} form opens to record party, mill and weights`],
-                      ],
-                    },
-                  ]}
-                />
-                <p className="mt-4 rounded-xl bg-amber-50 px-3 py-2.5 text-xs text-amber-800">Weight may go up or down by up to {WEIGHT_TOLERANCE_KG} KG in each process. Notes, documents and photos can be kept with every process.</p>
-                <WizardNav onBack={() => go(1)} onNext={() => void startStock()} disabled={saving} nextLabel={saving ? "Starting…" : `Start ${process}`} nextIcon={<Play size={15} />} hint="Nothing is saved until you press start." />
-              </>
-            ) : step === 2 ? (
-              <WizardNav onBack={() => go(1)} onNext={() => go(1)} nextLabel={`Pick the ${material} again`} hint={`The ${material} picked is no longer in stock.`} />
-            ) : null}
-          </div>
-        </section>
-      </div>
-    </div>
-  );
-}
-
 /** Everything about one batch: its journey, process forms, documents, weights and production costs. */
-function BatchView({ flow, directory, reload, onBack, managerMode = false, startInStage }: { flow: FabricFlow; directory: FlowDirectory; reload: () => Promise<void>; onBack: () => void; managerMode?: boolean; startInStage?: StageKey }) {
+function BatchView({ flow, directory, reload, onBack, managerMode = false, startInStage }: { flow: FabricFlow; directory: FlowDirectory; reload: () => Promise<void>; onBack: () => void; managerMode?: boolean; startInStage?: CardKey }) {
   const where = whereIs(flow);
   const ended = completedInWarehouse(flow);
-  const shownStages = managerMode ? stages.filter((stage) => stage.key === "knitting") : stages;
-  const [activeStage, setActiveStage] = useState<StageKey>(managerMode ? "knitting" : startInStage ?? where.next ?? "compacting");
+  const [activeStage, setActiveStage] = useState<StageKey>(managerMode ? "knitting" : startInStage === "delivery" ? "compacting" : startInStage ?? where.next ?? "compacting");
   // After a batch ended in a warehouse, the processes after that one haven't started; the next can be started from that stock.
   const startable = ended ? nextAfter[ended.stage] : null;
   const notStarted = !!ended && stages.findIndex((stage) => stage.key === activeStage) > stages.findIndex((stage) => stage.key === ended.stage);
-  /** "details": every process and the totals, read-only; "record": the forms to record or correct a process. */
-  const [view, setView] = useState<"details" | "record">(managerMode || startInStage ? "record" : "details");
-  const openStage = (stage: StageKey) => {
-    setActiveStage(stage);
-    setView("record");
+  /** The entry window open over the batch: a process's form, or the deliveries. */
+  const [modal, setModal] = useState<CardKey | null>(managerMode && isKnitting(flow) ? "knitting" : startInStage ?? null);
+  /** A delivery challan open to print or share (one just issued opens by itself). */
+  const [challanId, setChallanId] = useState<string | null>(null);
+  const openCard = (key: CardKey) => {
+    setActiveStage(key === "delivery" ? "compacting" : key);
+    setNotice(null);
+    setModal(key);
   };
+  const openStage = (stage: StageKey) => openCard(stage === "compacting" && flow.officeDeliveryKg !== null && flow.status === "AT_OFFICE" ? "delivery" : stage);
   const [notice, setNotice] = useState<{ tone: "success" | "error"; text: string } | null>(null);
   const [saving, setSaving] = useState(false);
 
-  const { data: warehouses = [] } = useApiQuery<Warehouse[]>("/masters/warehouses");
-  const activeWarehouses = warehouses.filter((warehouse) => warehouse.active !== false);
-  const [dyeing, setDyeing] = useState({ dyeingDate: localDate(), finishedDate: localDate(), dyeingPartyDetails: "", dyeingMillDetails: "", fabricReceivedKg: "", dyeingGreyWeightKg: "", color: "", dyeingCount: "", rollCount: "", dyeingOutputWeightKg: "", dyeingExpense: "0", compactingDeliveryKg: "", destination: "NEXT_PROCESS" as "NEXT_PROCESS" | "WAREHOUSE", warehouseId: "", nextPartyDetails: "", nextMillDetails: "", dyeingNotes: "" });
-  const [compacting, setCompacting] = useState({ compactingDate: localDate(), finishedDate: localDate(), compactingPartyDetails: "", compactingMillDetails: "", compactingInwardNo: "", compactingReceivedKg: "", compactingOutwardNo: "", officeDeliveryKg: "", compactingExpense: "0", compactingNotes: "" });
-
-  useEffect(() => {
-    setDyeing({
-      dyeingDate: localDate(flow.dyeingDate),
-      finishedDate: localDate(flow.dyeingFinishedAt),
-      dyeingPartyDetails: flow.dyeingPartyDetails || "",
-      // Each process has its own party and mill; nothing is carried over from knitting.
-      dyeingMillDetails: flow.dyeingMillDetails || "",
-      fabricReceivedKg: String(flow.fabricReceivedKg ?? flow.dyeingDeliveryKg ?? ""),
-      dyeingGreyWeightKg: String(flow.dyeingGreyWeightKg ?? ""),
-      color: flow.color || "",
-      dyeingCount: flow.dyeingCount || flow.yarnCount,
-      rollCount: String(flow.rollCount ?? ""),
-      dyeingOutputWeightKg: String(flow.dyeingOutputWeightKg ?? ""),
-      dyeingExpense: String(flow.dyeingExpense || 0),
-      dyeingNotes: flow.dyeingNotes || "",
-      compactingDeliveryKg: String(flow.compactingDeliveryKg ?? ""),
-      destination: flow.dyeingDestination ?? "NEXT_PROCESS",
-      warehouseId: flow.dyeingDestinationWarehouseId ?? "",
-      nextPartyDetails: flow.compactingPartyDetails || "",
-      nextMillDetails: flow.compactingMillDetails || "",
-    });
-    setCompacting({ compactingDate: localDate(flow.compactingDate), finishedDate: localDate(flow.compactingFinishedAt), compactingPartyDetails: flow.compactingPartyDetails || "", compactingMillDetails: flow.compactingMillDetails || "", compactingInwardNo: flow.compactingInwardNo || "", compactingReceivedKg: String(flow.compactingReceivedKg ?? flow.compactingDeliveryKg ?? ""), compactingOutwardNo: flow.compactingOutwardNo || "", officeDeliveryKg: String(flow.officeDeliveryKg ?? ""), compactingExpense: String(flow.compactingExpense || 0), compactingNotes: flow.compactingNotes || "" });
-    // Only when the batch itself was saved: attaching a file or adding an expense reloads it too, and must not
-    // wipe what is being typed.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flow.id, flow.updatedAt]);
-
-  /** Saves a stage, reloads the batch and moves to the next stage. Resolves true when saved. */
+  /**
+   * Saves a stage and reloads the batch; the entry window closes, and a delivery challan the save issued (the fabric
+   * left for the next process, a warehouse or a party) opens to print. Resolves true when saved.
+   */
   const run: RunStage = async (action, next) => {
     setSaving(true);
     setNotice(null);
     try {
+      const before = new Set((flow.challans ?? []).map((c) => c.id));
       const saved = await action();
+      const issued = (saved.challans ?? []).filter((c) => !before.has(c.id) && !c.cancelledAt);
       const text = `${saved.flowNo} saved. Weight and production cost were recalculated.`;
       setNotice({ tone: "success", text });
-      toast.success(text, "Stage saved");
+      toast.success(issued.length && !managerMode ? `${text} Delivery challan ${issued[issued.length - 1].challanNo} issued.` : text, "Stage saved");
       if (next) setActiveStage(next);
+      setModal(null);
+      // Challans are office documents (admins); a manager finishing knitting doesn't open one.
+      if (issued.length && !managerMode) setChallanId(issued[issued.length - 1].id);
       await reload();
       return true;
     } catch (error) {
+      // api() has already shown the error as a toast; the window repeats it at its top.
       setNotice({ tone: "error", text: error instanceof Error ? error.message : "Could not save this stage" });
       return false;
     } finally {
@@ -866,49 +907,28 @@ function BatchView({ flow, directory, reload, onBack, managerMode = false, start
   const awaitingStart: Record<StageKey, boolean> = { knitting: false, dyeing: stageOpen.dyeing && flow.dyeingDate === null, compacting: stageOpen.compacting && flow.compactingDate === null };
   // Dyeing that a warehouse has received can't be changed any more (knitting locks itself the same way).
   const dyeingLocked = !!warehouseDelivery(flow, "DYEING")?.receivedAt;
-  const stageReady = stageOpen[activeStage] && !(activeStage === "dyeing" && dyeingLocked);
-
-  // Each weight against the step before it: up to WEIGHT_TOLERANCE_KG more is fine, more is refused.
-  const dyeReceived = weightFeedback(flow.dyeingDeliveryKg, dyeing.fabricReceivedKg);
-  const dyeOutput = weightFeedback(numeric(dyeing.fabricReceivedKg), dyeing.dyeingOutputWeightKg);
-  const dyeSent = weightFeedback(numeric(dyeing.dyeingOutputWeightKg), dyeing.compactingDeliveryKg);
-  const compactReceived = weightFeedback(flow.compactingDeliveryKg, compacting.compactingReceivedKg);
-  const compactSent = weightFeedback(numeric(compacting.compactingReceivedKg), compacting.officeDeliveryKg);
-  const dyeingOver = dyeReceived.over || dyeOutput.over || dyeSent.over;
-  const compactingOver = compactReceived.over || compactSent.over;
-  const kgHint = `KG · ±${WEIGHT_TOLERANCE_KG}`;
-  const toWarehouse = dyeing.destination === "WAREHOUSE";
-
-  // What each form still needs, so its save bar can say why it can't save yet.
-  const dyeDateError = dyeing.dyeingDate && dyeing.finishedDate && dyeing.finishedDate < dyeing.dyeingDate ? "Completed before it started" : null;
-  const rollsError = dyeing.rollCount !== "" && !/^\d+$/.test(dyeing.rollCount.trim()) ? "Rolls are a whole number" : null;
-  const dyeingMissing = [
-    !dyeing.dyeingDate && "start date",
-    !dyeing.finishedDate && "completed date",
-    !dyeing.fabricReceivedKg && "fabric received",
-    !dyeing.dyeingGreyWeightKg && "grey fabric weight",
-    !dyeing.dyeingPartyDetails.trim() && "dyeing mill",
-    !dyeing.color.trim() && "colour",
-    !dyeing.dyeingCount.trim() && "count",
-    !dyeing.rollCount && "rolls",
-    !dyeing.dyeingOutputWeightKg && "dyeing output",
-    !dyeing.compactingDeliveryKg && (toWarehouse ? "weight sent" : "weight to compacting"),
-    toWarehouse ? !dyeing.warehouseId && "warehouse" : !dyeing.nextPartyDetails.trim() && "compacting mill",
-  ].filter((item): item is string => !!item);
-  const dyeingProblems = [dyeDateError, rollsError, dyeingOver && "a weight is over the limit"].filter((item): item is string => !!item);
-  const compactDateError = compacting.compactingDate && compacting.finishedDate && compacting.finishedDate < compacting.compactingDate ? "Completed before it started" : null;
-  const compactingMissing = [
-    !compacting.compactingDate && "start date",
-    !compacting.finishedDate && "completed date",
-    !compacting.compactingInwardNo.trim() && "inward number",
-    !compacting.compactingReceivedKg && "received weight",
-    !compacting.compactingOutwardNo.trim() && "outward number",
-    !compacting.officeDeliveryKg && "compacted weight",
-    !compacting.compactingPartyDetails.trim() && "compacting mill",
-  ].filter((item): item is string => !!item);
-  const compactingProblems = [compactDateError, compactingOver && "a weight is over the limit"].filter((item): item is string => !!item);
 
   const weightVariance = flow.metrics.currentWeightKg - flow.purchasedWeightKg;
+  const left = leftToDeliver(flow);
+  const openable: Record<CardKey, boolean> = {
+    // A dyeing lot's knitting is its knitting batch's, recorded there.
+    knitting: !flow.parent,
+    // A knitting batch dyes while grey fabric is left that isn't in a lot.
+    dyeing: (stageOpen.dyeing || stageDone.dyeing || startable === "dyeing") && (greyLeft(flow) ?? 1) > 0.0005,
+    compacting: stageOpen.compacting || stageDone.compacting || startable === "compacting",
+    delivery: flow.officeDeliveryKg !== null,
+  };
+  const actionOf = (key: CardKey) => {
+    if (key === "delivery") return flow.officeDeliveryKg === null ? "After compacting" : left !== null && left > 0.0005 ? "Deliver" : "Deliveries";
+    if (startable === key) return `Start ${key}`;
+    if (key === "knitting" && isKnitting(flow)) return where.next === "knitting" ? where.action : "Open knitting";
+    if (key === "dyeing" && dyeingLocked) return "View dyeing";
+    if (stageDone[key]) return "View & edit";
+    if (inProgress[key]) return `Complete ${key}`;
+    if (awaitingStart[key]) return `Start ${key}`;
+    return stageOpen[key] ? `Open ${key}` : "Waiting";
+  };
+  const modalTitle = modal === "delivery" ? "Delivery" : modal ? processName[modal] : "";
 
   return (
     <div className="production-page space-y-5 pb-10">
@@ -921,6 +941,7 @@ function BatchView({ flow, directory, reload, onBack, managerMode = false, start
           <div className="min-w-0">
             <p className="production-eyebrow">{yarnSource(flow)} · {flow.yarnCount}{flow.fabricType ? ` · ${flow.fabricType}` : ""}{flow.fabricDiameter ? ` · ${flow.fabricDiameter}` : ""}{flow.fabricGsm ? ` · ${gsmText(flow.fabricGsm)}` : ""}</p>
             <h1 className="production-hero__code">{flow.flowNo}</h1>
+            {flow.parent && <Link href={`/production?batch=${encodeURIComponent(flow.parent.flowNo)}`} className="mr-3 mt-1 inline-block text-xs font-semibold text-emerald-200 underline underline-offset-2 hover:text-white">Knitting batch {flow.parent.flowNo}</Link>}
             {flow.yarnItemCode && <Link href={itemHref(flow.yarnItemCode)} className="mt-1 inline-block text-xs font-semibold text-emerald-200 underline underline-offset-2 hover:text-white">Yarn code {flow.yarnItemCode} · view full details</Link>}
             <p className="mt-1.5 text-sm text-white/70">{where.place}</p>
           </div>
@@ -929,37 +950,30 @@ function BatchView({ flow, directory, reload, onBack, managerMode = false, start
           )}
         </div>
         <div className="production-hero__stats">
-          <Glass label="Yarn used" value={kg(flow.purchasedWeightKg)} note={managerMode ? (flow.yarnItemCode ?? undefined) : `${money(flow.yarnRatePerKg)} / KG`} />
+          {isKnitting(flow) ? (
+            <Glass label="Yarn given" value={kg(flow.yarnReceivedKg ?? flow.purchasedWeightKg)} note="What was used is entered when knitting finishes" />
+          ) : (
+            <Glass label={flow.parent ? "Grey fabric" : "Yarn used"} value={kg(flow.purchasedWeightKg)} note={managerMode ? (flow.yarnItemCode ?? undefined) : `${money(flow.yarnRatePerKg)} / KG`} />
+          )}
           <Glass label="Weight now" value={kg(flow.metrics.currentWeightKg)} note={`Delivered ${kg(flow.finalDeliveredKg ?? 0)}`} />
-          <Glass
-            label="Weight variance"
-            value={`${weightVariance > 0 ? "+" : weightVariance < 0 ? "−" : ""}${kg(Math.abs(weightVariance))}`}
-            note="Yarn input compared with current weight"
-          />
+          {isKnitting(flow) ? (
+            <Glass label="Knitted so far" value={kg(flow.knittingDeliveryKg ?? 0)} note="Loss is worked out when knitting finishes, from the yarn used" />
+          ) : (
+            <Glass
+              label="Weight variance"
+              value={`${weightVariance > 0 ? "+" : weightVariance < 0 ? "−" : ""}${kg(Math.abs(weightVariance))}`}
+              note={(flow.metrics.yarnReturnedKg ?? 0) > 0.0005 ? `Against the yarn used · ${kg(flow.metrics.yarnReturnedKg ?? 0)} back in the warehouse` : "Yarn used compared with current weight"}
+            />
+          )}
           {!managerMode && <Glass label="Production cost" value={money(flow.metrics.totalSpent)} note="Yarn, processes and other expenses" />}
         </div>
-        {!managerMode && <div className="production-segment" role="tablist" aria-label="View">
-          {([
-            ["details", "Details", ClipboardList],
-            ["record", "Record process", PenLine],
-          ] as const).map(([value, label, Icon]) => (
-            <button key={value} type="button" role="tab" aria-selected={view === value} onClick={() => setView(value)}>
-              <Icon size={15} /> {label}
-            </button>
-          ))}
-        </div>}
       </header>
 
-      {!managerMode && <BatchJourney flow={flow} onOpen={openStage} />}
 
-      {notice && <div className={cn("flex items-center gap-2 rounded-2xl border px-4 py-3 text-sm", notice.tone === "success" ? "border-emerald-200 bg-emerald-50 text-emerald-800" : "border-rose-200 bg-rose-50 text-rose-800")}>{notice.tone === "success" ? <CheckCircle2 size={17} /> : <AlertTriangle size={17} />}{notice.text}</div>}
-
-      {view === "details" && (
-        <div className="production-layout">
-          <BatchProcesses flow={flow} />
-          <aside className="space-y-5">
-            <BatchTotals flow={flow} />
-            <ExpenseLedger flow={flow} reload={reload} />
+      <div className="production-layout">
+        <div className="min-w-0 space-y-5">
+          <ProcessCards flow={flow} managerMode={managerMode} stateOf={stageState} openable={openable} actionOf={actionOf} onOpen={openCard} onChallan={setChallanId} />
+          {!managerMode && (
             <section className="production-card">
               <CardHead eyebrow="Record" title={`Everything that happened to ${flow.flowNo}`} />
               <div className="production-card__body">
@@ -977,276 +991,72 @@ function BatchView({ flow, directory, reload, onBack, managerMode = false, start
                 </ol>
               </div>
             </section>
-          </aside>
+          )}
         </div>
-      )}
-
-      {view === "record" && (
-        <div className="production-layout">
-          <div className="min-w-0 space-y-4">
-          <nav className="production-switcher" role="tablist" aria-label="Process">
-            {shownStages.map((stage, index) => {
-              const Icon = stage.icon;
-              return (
-                <button
-                  key={stage.key}
-                  type="button"
-                  role="tab"
-                  aria-selected={activeStage === stage.key}
-                  onClick={() => setActiveStage(stage.key)}
-                  className={cn("production-switch", `is-${stage.key}`, stageDone[stage.key] && "is-done", !stageDone[stage.key] && stageOpen[stage.key] && "is-now")}
-                >
-                  <span className="production-switch__num" aria-hidden>{String(index + 1).padStart(2, "0")}</span>
-                  <span className="production-switch__icon">{stageDone[stage.key] ? <Check size={18} strokeWidth={3} /> : <Icon size={18} />}</span>
-                  <span className="min-w-0">
-                    <span className="production-switch__label">{stage.label}</span>
-                    <span className="production-switch__state">{stageState(stage.key)}</span>
-                  </span>
-                </button>
-              );
-            })}
-          </nav>
-          <section id="production-workspace" className={cn("production-card production-form scroll-mt-20", `is-${activeStage}`)}>
-            {!managerMode && <StageBanner flow={flow} stage={activeStage} state={stageState(activeStage)} />}
-            <div className="production-card__body">
-              {!notStarted && !stageOpen[activeStage] && <div className="mb-5 flex gap-3 rounded-2xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800"><AlertTriangle className="mt-0.5 shrink-0" size={17} /><div><p className="font-bold">Previous process is not finished</p><p className="mt-1 text-xs">Record the earlier process and its delivered weight first.</p></div></div>}
-              {!notStarted && (activeStage === "knitting" || activeStage === "dyeing") && <WarehouseNotice flow={flow} stage={activeStage} />}
-              {notStarted && ended && startable && (activeStage === startable
-                ? <StartFromWarehouse flow={flow} process={startable} saving={saving} run={run} />
-                : <div className="flex gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700"><Building2 className="mt-0.5 shrink-0 text-gray-400" size={17} /><div><p className="font-bold">Not started</p><p className="mt-1 text-xs">The batch&apos;s {ended.stage === "knitting" ? "grey" : "dyed"} fabric is in {ended.delivery.warehouse?.code ?? "the warehouse"}. Start {startable} first; {processName[activeStage].toLowerCase()} follows it.</p></div></div>)}
-
-              {activeStage === "knitting" && <KnittingStage flow={flow} directory={directory} saving={saving} run={run} onAttachmentsChanged={() => void reload()} showPrices={!managerMode} managerMode={managerMode} />}
-
-              {activeStage === "dyeing" && !notStarted && awaitingStart.dyeing && <StartProcess key={`dyeing-${flow.id}`} flow={flow} process="dyeing" directory={directory} saving={saving} run={run} />}
-              {activeStage === "dyeing" && !notStarted && !awaitingStart.dyeing && <div className="space-y-5">
-                {isDyeing(flow) && <InProgressNote flow={flow} process="dyeing" />}
-                <fieldset disabled={dyeingLocked} className="min-w-0">
-                  <div className="production-field-section">
-                    <SectionHeading icon={Hash} title={isDyeing(flow) ? `Complete dyeing ${flow.flowNo}` : `Dyeing ${flow.flowNo}`} caption="When it started and was completed, and the fabric taken in; the batch is tracked by its code" />
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      <Field label="Started on" required><Input type="date" value={dyeing.dyeingDate} onChange={(e) => setDyeing({ ...dyeing, dyeingDate: e.target.value })} /></Field>
-                      <Field label="Completed on" required error={dyeDateError}><Input type="date" min={dyeing.dyeingDate} value={dyeing.finishedDate} onChange={(e) => setDyeing({ ...dyeing, finishedDate: e.target.value })} /></Field>
-                      <Field label="Fabric received" required hint={flow.dyeingDeliveryKg !== null ? `Sent ${kg(flow.dyeingDeliveryKg)} · ±${WEIGHT_TOLERANCE_KG}` : kgHint} error={dyeReceived.error} warning={dyeReceived.warning}><WeightInput value={dyeing.fabricReceivedKg} onValueChange={(fabricReceivedKg) => setDyeing({ ...dyeing, fabricReceivedKg })} /></Field>
-                      <Field label="Grey fabric weight" required hint="As weighed at the mill"><WeightInput value={dyeing.dyeingGreyWeightKg} onValueChange={(dyeingGreyWeightKg) => setDyeing({ ...dyeing, dyeingGreyWeightKg })} /></Field>
-                    </div>
-                  </div>
-                  <div className="production-field-section">
-                    <SectionHeading icon={UserRound} title="Party & mill" caption="Who dyes it; search a registered name or add a new one" />
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      <Field label="Dyeing mill" required className="md:col-span-2"><SearchableSelect placeholder="Select dyeing mill" options={directory.dyeingMills} value={dyeing.dyeingPartyDetails} onChange={(value) => setDyeing({ ...dyeing, dyeingPartyDetails: value, dyeingMillDetails: value })} /></Field>
-                    </div>
-                  </div>
-                  <div className="production-field-section">
-                    <SectionHeading icon={Palette} title="Fabric specs" caption="Colour, count and rolls" />
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      <Field label="Colour" required><Input placeholder="Fabric colour" maxLength={80} value={dyeing.color} onChange={(e) => setDyeing({ ...dyeing, color: e.target.value })} /></Field>
-                      <Field label="Count" required><Input placeholder="e.g. 30s combed" value={dyeing.dyeingCount} onChange={(e) => setDyeing({ ...dyeing, dyeingCount: e.target.value })} /></Field>
-                      <Field label="Number of rolls" required error={rollsError}><Input type="number" min="0" step="1" inputMode="numeric" value={dyeing.rollCount} onChange={(e) => setDyeing({ ...dyeing, rollCount: e.target.value })} /></Field>
-                      <Field label="Dyeing output" required hint={kgHint} error={dyeOutput.error} warning={dyeOutput.warning}><WeightInput value={dyeing.dyeingOutputWeightKg} onValueChange={(dyeingOutputWeightKg) => setDyeing({ ...dyeing, dyeingOutputWeightKg })} /></Field>
-                    </div>
-                  </div>
-                  <div className="production-field-section">
-                    <SectionHeading icon={Banknote} title="Cost & delivery" caption={toWarehouse ? "What dyeing cost and the dyed fabric sent into a warehouse" : "What dyeing cost and the weight sent on to compacting"} />
-                    <FieldGroup label="Deliver to" required>
-                      <DestinationToggle value={dyeing.destination} next="compacting" onChange={(destination) => setDyeing({ ...dyeing, destination, warehouseId: "" })} />
-                    </FieldGroup>
-                    <div className="mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      <Field label={toWarehouse ? "Sent to warehouse" : "Delivered to compacting"} required hint={kgHint} error={dyeSent.error} warning={dyeSent.warning}><WeightInput value={dyeing.compactingDeliveryKg} onValueChange={(compactingDeliveryKg) => setDyeing({ ...dyeing, compactingDeliveryKg })} /></Field>
-                      {toWarehouse ? <Field label="Warehouse" required><select className="erp-input" value={dyeing.warehouseId} onChange={(e) => setDyeing({ ...dyeing, warehouseId: e.target.value })}><option value="">Select warehouse</option>{activeWarehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.code} · {warehouse.name}</option>)}</select></Field>
-                        : <Field label="Next compacting mill" required><SearchableSelect placeholder="Select compacting mill" options={directory.compactingMills} value={dyeing.nextPartyDetails} onChange={(value) => setDyeing({ ...dyeing, nextPartyDetails: value, nextMillDetails: value })} /></Field>}
-                      <Field label="Dyeing expense" hint="₹"><Input type="number" min="0" step="0.01" inputMode="decimal" value={dyeing.dyeingExpense} onChange={(e) => setDyeing({ ...dyeing, dyeingExpense: e.target.value })} /></Field>
-                    </div>
-                  </div>
-                  <ProcessNotes
-                    flow={flow}
-                    stage="DYEING"
-                    notes={dyeing.dyeingNotes}
-                    onNotes={(dyeingNotes) => setDyeing({ ...dyeing, dyeingNotes })}
-                    onFilesChanged={() => void reload()}
-                  />
-                </fieldset>
-                {!dyeingLocked && <div className="production-dock">
-                <StageEstimate input={numeric(dyeing.fabricReceivedKg)} output={numeric(dyeing.compactingDeliveryKg)} expense={numeric(dyeing.dyeingExpense)} label="Dyeing" />
-                <div className="production-dock__save">
-                  <SaveChecklist total={11} missing={dyeingMissing} problems={dyeingProblems} />
-                  <Button disabled={saving || !stageReady || dyeingMissing.length > 0 || dyeingProblems.length > 0} onClick={() => void run(() => api<FabricFlow>(`/production/fabric-flows/${flow.id}/dyeing`, { method: "POST", body: JSON.stringify({ ...dyeing, dyeingPartyDetails: dyeing.dyeingPartyDetails.trim(), dyeingMillDetails: (dyeing.dyeingMillDetails || dyeing.dyeingPartyDetails).trim(), color: dyeing.color.trim(), dyeingCount: dyeing.dyeingCount.trim(), dyeingNotes: dyeing.dyeingNotes.trim() || undefined, warehouseId: toWarehouse ? dyeing.warehouseId : undefined, nextPartyDetails: toWarehouse ? undefined : dyeing.nextPartyDetails.trim(), nextMillDetails: toWarehouse ? undefined : (dyeing.nextMillDetails || dyeing.nextPartyDetails).trim(), fabricReceivedKg: numeric(dyeing.fabricReceivedKg), dyeingGreyWeightKg: numeric(dyeing.dyeingGreyWeightKg), rollCount: Math.floor(numeric(dyeing.rollCount)), dyeingOutputWeightKg: numeric(dyeing.dyeingOutputWeightKg), dyeingExpense: numeric(dyeing.dyeingExpense), compactingDeliveryKg: numeric(dyeing.compactingDeliveryKg) }) }), toWarehouse ? "dyeing" : "compacting")}>{saving ? "Saving…" : flow.dyeingOutputWeightKg === null ? (toWarehouse ? "Complete dyeing & send to warehouse" : "Complete dyeing & send to compacting") : "Save changes"} <ArrowRight size={15} /></Button>
-                </div>
-                </div>}
-                {dyeingLocked && <p className="flex items-center gap-2 text-xs text-gray-500"><CheckCircle2 size={13} /> The warehouse has received this dyed fabric, so dyeing can no longer be changed.</p>}
-              </div>}
-
-              {activeStage === "compacting" && !notStarted && awaitingStart.compacting && <StartProcess key={`compacting-${flow.id}`} flow={flow} process="compacting" directory={directory} saving={saving} run={run} />}
-              {activeStage === "compacting" && !notStarted && !awaitingStart.compacting && <div className="space-y-5">
-                {isCompacting(flow) && <InProgressNote flow={flow} process="compacting" />}
-                <div>
-                  <div className="production-field-section">
-                    <SectionHeading icon={Sparkles} title={isCompacting(flow) ? `Complete compacting ${flow.flowNo}` : "Compacting details"} caption="When it started and was completed, inward receipt and outward delivery" />
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      <Field label="Started on" required><Input type="date" value={compacting.compactingDate} onChange={(e) => setCompacting({ ...compacting, compactingDate: e.target.value })} /></Field>
-                      <Field label="Completed on" required error={compactDateError}><Input type="date" min={compacting.compactingDate} value={compacting.finishedDate} onChange={(e) => setCompacting({ ...compacting, finishedDate: e.target.value })} /></Field>
-                      <Field label="Compacting expense" hint="₹"><Input type="number" min="0" step="0.01" inputMode="decimal" value={compacting.compactingExpense} onChange={(e) => setCompacting({ ...compacting, compactingExpense: e.target.value })} /></Field>
-                      <Field label="Inward number" required hint="Gate pass / challan"><Input placeholder="Inward reference" value={compacting.compactingInwardNo} onChange={(e) => setCompacting({ ...compacting, compactingInwardNo: e.target.value })} /></Field>
-                      <Field label="Received weight" required hint={flow.compactingDeliveryKg !== null ? `Sent ${kg(flow.compactingDeliveryKg)} · ±${WEIGHT_TOLERANCE_KG}` : kgHint} error={compactReceived.error} warning={compactReceived.warning}><WeightInput value={compacting.compactingReceivedKg} onValueChange={(compactingReceivedKg) => setCompacting({ ...compacting, compactingReceivedKg })} /></Field>
-                      <Field label="Outward number" required hint="Gate pass / challan"><Input placeholder="Outward reference" value={compacting.compactingOutwardNo} onChange={(e) => setCompacting({ ...compacting, compactingOutwardNo: e.target.value })} /></Field>
-                      <Field label="Compacted weight" required hint={kgHint} error={compactSent.error} warning={compactSent.warning}><WeightInput value={compacting.officeDeliveryKg} onValueChange={(officeDeliveryKg) => setCompacting({ ...compacting, officeDeliveryKg })} /></Field>
-                    </div>
-                  </div>
-                  <div className="production-field-section">
-                    <SectionHeading icon={UserRound} title="Party & mill" caption="Who compacts it; search a registered name or add a new one" />
-                    <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-                      <Field label="Compacting mill" required className="md:col-span-2"><SearchableSelect placeholder="Select compacting mill" options={directory.compactingMills} value={compacting.compactingPartyDetails} onChange={(value) => setCompacting({ ...compacting, compactingPartyDetails: value, compactingMillDetails: value })} /></Field>
-                    </div>
-                  </div>
-                  <ProcessNotes
-                    flow={flow}
-                    stage="COMPACTING"
-                    notes={compacting.compactingNotes}
-                    onNotes={(compactingNotes) => setCompacting({ ...compacting, compactingNotes })}
-                    onFilesChanged={() => void reload()}
-                  />
-                </div>
-                <div className="production-dock">
-                <StageEstimate input={numeric(compacting.compactingReceivedKg)} output={numeric(compacting.officeDeliveryKg)} expense={numeric(compacting.compactingExpense)} label="Compacting" />
-                <div className="production-dock__save">
-                  <SaveChecklist total={7} missing={compactingMissing} problems={compactingProblems} />
-                  <Button disabled={saving || !stageReady || compactingMissing.length > 0 || compactingProblems.length > 0} onClick={() => void run(() => api<FabricFlow>(`/production/fabric-flows/${flow.id}/compacting`, { method: "POST", body: JSON.stringify({ ...compacting, compactingPartyDetails: compacting.compactingPartyDetails.trim(), compactingMillDetails: (compacting.compactingMillDetails || compacting.compactingPartyDetails).trim(), compactingInwardNo: compacting.compactingInwardNo.trim(), compactingOutwardNo: compacting.compactingOutwardNo.trim(), compactingNotes: compacting.compactingNotes.trim() || undefined, compactingReceivedKg: numeric(compacting.compactingReceivedKg), officeDeliveryKg: numeric(compacting.officeDeliveryKg), compactingExpense: numeric(compacting.compactingExpense) }) }), "compacting")}>{saving ? "Saving…" : flow.officeDeliveryKg === null ? "Complete compacting" : "Save changes"} <Sparkles size={15} /></Button>
-                </div>
-                </div>
-                {flow.officeDeliveryKg !== null && (
-                  <div className="production-delivery-block is-delivery">
-                    <div className="production-subbanner">
-                      <span className="production-subbanner__icon"><Truck size={18} /></span>
-                      <div className="min-w-0"><p className="production-subbanner__title">Delivery</p><p className="production-subbanner__sub">The compacted fabric of {flow.flowNo}, to a party or into a warehouse</p></div>
-                    </div>
-                    <DeliveryStage flow={flow} saving={saving} run={run} onFilesChanged={() => void reload()} parties={directory.deliveryParties} />
-                  </div>
-                )}
-              </div>}
-            </div>
+        <aside className="space-y-5">
+          <section className="production-card">
+            <CardHead eyebrow="Batch calculation" title="Weight & production cost" />
+            <BatchCalculation flow={flow} active={activeStage} />
           </section>
-          </div>
+          {!managerMode && <ExpenseLedger flow={flow} reload={reload} />}
+        </aside>
+      </div>
 
-          <aside className="space-y-5">
-            <section className="production-card">
-              <CardHead eyebrow="Batch calculation" title="Weight & production cost" />
-              <BatchCalculation flow={flow} active={activeStage} />
-            </section>
-            <ExpenseLedger flow={flow} reload={reload} />
-          </aside>
-        </div>
+      {modal && (
+        <ProcessDialog title={`${modalTitle} · ${flow.flowNo}`} caption={modal === "delivery" ? "The finished fabric to a party or a warehouse; each delivery gets its delivery challan" : `${stageState(modal)} · each finished process sends its fabric on with a delivery challan`} busy={saving} onClose={() => setModal(null)}>
+          {notice?.tone === "error" && <div className="mb-4 flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle size={17} />{notice.text}</div>}
+          {modal === "delivery" ? (
+            <DeliveryForm key={`delivery-${flow.updatedAt}`} flow={flow} saving={saving} run={run} onFilesChanged={() => void reload()} onChallan={setChallanId} parties={directory.deliveryParties} />
+          ) : (
+            <>
+              {(activeStage === "knitting" || activeStage === "dyeing") && <WarehouseNotice flow={flow} stage={activeStage} />}
+              {activeStage === "knitting" && <KnittingForm key={`knitting-${flow.updatedAt}`} flow={flow} directory={directory} saving={saving} run={run} onFilesChanged={() => void reload()} showPrices={!managerMode} managerMode={managerMode} />}
+              {activeStage !== "knitting" && (
+                startable === activeStage ? (
+                  <StartProcessForm key={`start-${activeStage}-${flow.updatedAt}`} flow={flow} process={activeStage} directory={directory} saving={saving} run={run} fromWarehouse />
+                ) : notStarted || !stageOpen[activeStage] ? (
+                  <div className="flex gap-3 rounded-2xl border border-gray-200 bg-gray-50 p-4 text-sm text-gray-700">
+                    <Building2 className="mt-0.5 shrink-0 text-gray-400" size={17} />
+                    <div>
+                      <p className="font-bold">Not started</p>
+                      <p className="mt-1 text-xs">{ended && startable ? `The batch's ${ended.stage === "knitting" ? "grey" : "dyed"} fabric is in ${ended.delivery.warehouse?.code ?? "the warehouse"}. Start ${startable} first; ${processName[activeStage].toLowerCase()} follows it.` : "Complete the process before it and send its fabric on first."}</p>
+                    </div>
+                  </div>
+                ) : awaitingStart[activeStage] ? (
+                  <StartProcessForm key={`start-${activeStage}-${flow.updatedAt}`} flow={flow} process={activeStage} directory={directory} saving={saving} run={run} fromWarehouse={false} />
+                ) : activeStage === "dyeing" ? (
+                  <DyeingForm key={`dyeing-${flow.updatedAt}`} flow={flow} directory={directory} saving={saving} run={run} onFilesChanged={() => void reload()} showPrices={!managerMode} />
+                ) : (
+                  <CompactingForm key={`compacting-${flow.updatedAt}`} flow={flow} directory={directory} saving={saving} run={run} onFilesChanged={() => void reload()} showPrices={!managerMode} />
+                )
+              )}
+            </>
+          )}
+        </ProcessDialog>
       )}
+      {challanId && <ProcessChallanDialog challanId={challanId} onClose={() => setChallanId(null)} />}
     </div>
   );
 }
 
-/** A batch's journey: every process as a step, done / now / not yet; a step opens its form. */
-function BatchJourney({ flow, onOpen }: { flow: FabricFlow; onOpen: (stage: StageKey) => void }) {
-  const steps = processSteps(flow);
-  // A batch that ended in a warehouse stops at that process; one still being received there has no next step yet.
-  const ended = completedInWarehouse(flow);
-  const sent = sentToWarehouse(flow);
-  const endIndex = endedStep(flow);
-  const sentIndex = sent ? (sent.stage === "knitting" ? 1 : 2) : null;
-  // The yarn step is always done; each later process is done once it has sent material on. The first one that hasn't is next.
-  const done = (index: number) => index === 0 || ((endIndex === null || index <= endIndex) && steps[index].weight !== null);
-  const next = endIndex !== null || sentIndex !== null ? -1 : steps.findIndex((_, index) => !done(index));
-  const handOff = (index: number) =>
-    index === endIndex && ended
-      ? `Received in ${ended.delivery.warehouse?.code ?? "warehouse"} · ${shortDate(ended.delivery.receivedAt)}`
-      : index === sentIndex && sent
-        ? `Sent to ${sent.delivery.warehouse?.code ?? "warehouse"} · not received yet`
-        : null;
+/** The entry window for a process or the deliveries, over the batch page (it keeps the production styles). */
+function ProcessDialog({ title, caption, busy, onClose, children }: { title: string; caption: string; busy: boolean; onClose: () => void; children: React.ReactNode }) {
   return (
-    <nav className="production-journey" aria-label="Processes">
-      {steps.map((step, index) => {
-        const { icon: Icon, accent, opens } = journeyStyle[index];
-        // A started process shows who has the fabric now; one not started yet is waiting to be started.
-        const running =
-          step.key === "knitting" && isKnitting(flow)
-            ? [flow.knittingPartyDetails, flow.knittingExpectedFinishDate && `due ${shortDate(flow.knittingExpectedFinishDate)}`].filter(Boolean).join(" · ") || "Knitting"
-            : step.key === "dyeing" && isDyeing(flow)
-              ? [flow.dyeingPartyDetails, `since ${shortDate(flow.dyeingDate)}`].filter(Boolean).join(" · ")
-              : step.key === "compacting" && isCompacting(flow)
-                ? [flow.compactingPartyDetails, `since ${shortDate(flow.compactingDate)}`].filter(Boolean).join(" · ")
-                : null;
-        // Steps after the warehouse stop haven't started; the one right after it can be started from the warehouse stock.
-        if (endIndex !== null && index > endIndex) {
-          return (
-            <button key={step.key} type="button" className={cn("production-journey__step", accent, index === endIndex + 1 && "is-now")} onClick={() => onOpen(opens)} title={`Open ${opens} under Record process`}>
-              <span className="production-journey__node"><Icon size={16} /></span>
-              <span className="production-journey__label">{step.label}</span>
-              <span className="production-journey__value">{index === endIndex + 1 ? "Can start" : "—"}</span>
-              <span className="production-journey__meta">{index === endIndex + 1 ? "From the warehouse stock" : "Not started"}</span>
-            </button>
-          );
-        }
-        return (
-          <button
-            key={step.key}
-            type="button"
-            className={cn("production-journey__step", accent, done(index) && "is-done", index === next && "is-now")}
-            onClick={() => onOpen(opens)}
-            title={`Open ${opens} under Record process`}
-          >
-            <span className="production-journey__node">{done(index) ? <Check size={16} strokeWidth={3} /> : <Icon size={16} />}</span>
-            <span className="production-journey__label">{step.label}</span>
-            <span className="production-journey__value">{done(index) ? kg(step.weight ?? 0) : index === next ? (running ? "In progress" : "Next") : "—"}</span>
-            <span className="production-journey__meta">
-              {done(index)
-                ? handOff(index) ?? ([shortDate(step.date), step.who].filter(Boolean).join(" · ") || "Recorded")
-                : index === next
-                  ? running ?? (step.key === "final" ? "Waiting for this process" : "Not started yet")
-                  : "Not reached yet"}
-            </span>
-          </button>
-        );
-      })}
-    </nav>
-  );
-}
-
-/** What one process took in and sent on, what it cost and who did it, for its banner. */
-function stageInfo(flow: FabricFlow, stage: StageKey) {
-  const join = (...parts: (string | null)[]) => parts.filter(Boolean).join(" · ") || null;
-  if (stage === "knitting") {
-    return { from: "Yarn", to: "Grey fabric", input: flow.yarnReceivedKg ?? flow.purchasedWeightKg, output: flow.knittingDeliveryKg ?? flow.dyeingDeliveryKg, expense: flow.knittingExpense, who: join(flow.knittingPartyDetails, flow.knittingMillDetails) };
-  }
-  if (stage === "dyeing") {
-    return { from: "Grey fabric", to: "Dyed fabric", input: flow.fabricReceivedKg ?? flow.dyeingDeliveryKg, output: flow.compactingDeliveryKg, expense: flow.dyeingExpense, who: join(flow.dyeingPartyDetails, flow.dyeingMillDetails, flow.color) };
-  }
-  return { from: "Dyed fabric", to: "Finished fabric", input: flow.compactingReceivedKg ?? flow.compactingDeliveryKg, output: flow.officeDeliveryKg, expense: flow.compactingExpense, who: join(flow.compactingPartyDetails, flow.compactingMillDetails) };
-}
-
-/** The coloured banner over a process's form: which process, who does it, and its weight in, out and cost so far. */
-function StageBanner({ flow, stage, state }: { flow: FabricFlow; stage: StageKey; state: string }) {
-  const index = stages.findIndex((s) => s.key === stage);
-  const { icon: Icon, label } = stages[index];
-  const info = stageInfo(flow, stage);
-  const diff = info.input !== null && info.output !== null && info.input > 0 ? info.output - info.input : null;
-  return (
-    <div className="production-banner">
-      <div className="flex flex-wrap items-center justify-between gap-3">
-        <div className="flex min-w-0 items-center gap-3">
-          <span className="production-banner__icon"><Icon size={22} /></span>
-          <div className="min-w-0">
-            <p className="production-banner__eyebrow">Process {String(index + 1).padStart(2, "0")} · {info.from} → {info.to}</p>
-            <h2 className="production-banner__title">{label} <span className="production-banner__code">{flow.flowNo}</span></h2>
-            <p className="production-banner__sub">{info.who ?? "Party and mill not recorded yet"}</p>
+    <Dialog.Root open onOpenChange={(open) => !open && !busy && onClose()}>
+      <Dialog.Portal>
+        <Dialog.Overlay className="users-dialog__overlay" />
+        <Dialog.Content className="users-dialog production-page production-modal" aria-describedby="production-modal-caption" onEscapeKeyDown={keepDialogForOpenDropdown}>
+          <div className="users-dialog__head">
+            <div className="min-w-0">
+              <Dialog.Title className="truncate text-base font-bold text-[#123f35]">{title}</Dialog.Title>
+              <Dialog.Description id="production-modal-caption" className="text-xs text-gray-500">{caption}</Dialog.Description>
+            </div>
+            <Dialog.Close className="users-dialog__close" aria-label="Close" disabled={busy}><X size={16} /></Dialog.Close>
           </div>
-        </div>
-        <span className="production-banner__state">{state}</span>
-      </div>
-      <div className="production-banner__figures">
-        <div><p>Weight in</p><strong>{info.input !== null ? kg(info.input) : "—"}</strong></div>
-        <div><p>Weight out</p><strong>{info.output !== null ? kg(info.output) : "—"}</strong></div>
-        <div>
-          <p>{diff !== null && diff > 0 ? "Gain" : "Loss"}</p>
-          <strong>{diff === null ? "—" : `${diff > 0 ? "+" : diff < 0 ? "−" : ""}${kg(Math.abs(diff))}`}</strong>
-          {diff !== null && info.input ? <small className="production-banner__pct">{((Math.abs(diff) / info.input) * 100).toFixed(2)}% of weight in</small> : null}
-        </div>
-        <div><p>Expense</p><strong>{money(info.expense)}</strong></div>
-      </div>
-    </div>
+          <div className="users-dialog__body">{children}</div>
+        </Dialog.Content>
+      </Dialog.Portal>
+    </Dialog.Root>
   );
 }
 
@@ -1284,95 +1094,6 @@ function WarehouseNotice({ flow, stage }: { flow: FabricFlow; stage: "knitting" 
     </div>
   );
 }
-
-/**
- * Continues a batch that ended in a warehouse: its fabric there (stock under the batch code) is taken out and the
- * next process starts, the same as starting that process from warehouse stock.
- */
-function StartFromWarehouse({ flow, process, saving, run }: { flow: FabricFlow; process: "dyeing" | "compacting"; saving: boolean; run: RunStage }) {
-  const category = process === "dyeing" ? "GREY_FABRIC" : "DYED_FABRIC";
-  const fabric = process === "dyeing" ? "grey fabric" : "dyed fabric";
-  const stock = useApiQuery<StartStock[]>(`/inventory/balances${qs({ category })}`);
-  const { data: warehouses = [] } = useApiQuery<Warehouse[]>("/masters/warehouses");
-  const warehouseOf = new Map(warehouses.map((warehouse) => [warehouse.id, warehouse]));
-  const rows = (stock.data ?? []).filter((row) => row.itemCode === flow.flowNo && row.unit === "KG" && row.balanceKg > 0.0005);
-  const [warehouseId, setWarehouseId] = useState("");
-  const chosen = rows.find((row) => row.warehouseId === warehouseId) ?? (rows.length === 1 ? rows[0] : undefined);
-
-  const start = () =>
-    chosen &&
-    run(
-      () => api<FabricFlow>("/production/fabric-flows/start-stock-process", { method: "POST", body: JSON.stringify({ process, itemCode: chosen.itemCode, warehouseId: chosen.warehouseId, quantityKg: chosen.balanceKg }) }),
-      process,
-    );
-
-  return (
-    <div className="production-field-section">
-      <SectionHeading icon={Play} title={`Start ${process}`} caption={`Continue ${flow.flowNo} with its ${fabric} from the warehouse`} />
-      {stock.loading ? (
-        <p className="text-sm text-gray-500">Checking warehouse stock…</p>
-      ) : rows.length === 0 ? (
-        <p className="rounded-xl border border-dashed border-gray-200 px-3 py-4 text-center text-xs text-gray-500">No {fabric} of {flow.flowNo} is left in any warehouse, so {process} can&apos;t be started.</p>
-      ) : (
-        <>
-          {rows.length > 1 ? (
-            <Field label="From warehouse">
-              <select className="erp-input" value={chosen?.warehouseId ?? ""} onChange={(e) => setWarehouseId(e.target.value)}>
-                <option value="">Select warehouse</option>
-                {rows.map((row) => <option key={row.warehouseId} value={row.warehouseId}>{warehouseOf.get(row.warehouseId)?.code ?? "Warehouse"} · {kg(row.balanceKg)}</option>)}
-              </select>
-            </Field>
-          ) : (
-            <p className="text-sm text-gray-700">{kg(rows[0].balanceKg)} {fabric} of {flow.flowNo} is in {warehouseOf.get(rows[0].warehouseId)?.code ?? "the warehouse"}.</p>
-          )}
-          <p className="mt-2 text-xs text-gray-500">All of it is taken out of the warehouse and sent to {process}; then record {process} here as usual.</p>
-          <div className="mt-4 flex justify-end">
-            <Button disabled={saving || !chosen} onClick={() => void start()}><Play size={15} /> {saving ? "Starting…" : chosen ? `Start ${process} with ${kg(chosen.balanceKg)}` : `Start ${process}`}</Button>
-          </div>
-        </>
-      )}
-    </div>
-  );
-}
-
-/**
- * A process's notes (saved with the process) and its documents and photos (saved as soon as they are attached).
- */
-function ProcessNotes({
-  flow,
-  stage,
-  notes,
-  onNotes,
-  onFilesChanged,
-}: {
-  flow: FabricFlow;
-  stage: AttachmentStage;
-  notes: string;
-  onNotes: (notes: string) => void;
-  onFilesChanged: () => void;
-}) {
-  return (
-    <div className="production-field-section">
-      <SectionHeading icon={Paperclip} title="Notes & documents" caption="Notes are saved with this process; files are saved as soon as you attach them" />
-      <div className="space-y-3">
-        <Field label="Notes" hint="Optional">
-          <textarea className="erp-input min-h-[4.5rem] py-2" maxLength={1000} placeholder="Anything worth remembering about this process" value={notes} onChange={(e) => onNotes(e.target.value)} />
-        </Field>
-        <Attachments flowId={flow.id} stage={stage} attachments={flow.attachments} onChanged={onFilesChanged} />
-      </div>
-    </div>
-  );
-}
-
-function StageEstimate({ input, output, expense, label }: { input: number; output: number; expense: number; label: string }) {
-  return <div className="production-estimate grid gap-3 sm:grid-cols-3"><div><p className="text-[10px] font-bold uppercase tracking-wider text-gray-400">{label} input</p><p className="mt-1 text-base font-bold text-gray-800">{kg(input)}</p></div><WeightChange input={input} output={output} label={label} /><div><p className="text-[10px] font-bold uppercase tracking-wider text-amber-600">Stage expense</p><p className="mt-1 text-base font-bold text-amber-800">{money(expense)}</p></div></div>;
-}
-
-/** Field feedback for one weight against the step before it: refused when too high, flagged when a lot was lost. */
-const weightFeedback = (input: number | null, output: string) => {
-  const check = weightCheck(input ?? 0, numeric(output));
-  return { error: check.kind === "over" ? check.message : null, warning: check.kind === "bigLoss" ? check.message : null, over: check.kind === "over" };
-};
 
 /** A semicircle gauge: how much of the yarn weight the batch still has (more than 100% when it gained). */
 function YieldGauge({ pct }: { pct: number }) {
@@ -1414,24 +1135,28 @@ function ChangeChip({ diff }: { diff: number | null }) {
 function BatchCalculation({ flow, active }: { flow: FabricFlow; active: StageKey }) {
   const yarn = flow.purchasedWeightKg;
   const rows: Array<{ key: string; label: string; value: number | null; accent: string; icon: LucideIcon }> = [
-    { key: "yarn", label: flow.yarnItemCode ? "Yarn used" : "Yarn purchased", value: yarn, accent: "is-yarn", icon: Boxes },
+    { key: "yarn", label: flow.parent ? "Grey fabric in" : isKnitting(flow) ? "Yarn given" : flow.yarnItemCode ? "Yarn used" : "Yarn purchased", value: yarn, accent: "is-yarn", icon: Boxes },
     { key: "knitting", label: "After knitting", value: flow.dyeingDeliveryKg, accent: "is-knitting", icon: Factory },
     { key: "dyeing", label: "After dyeing", value: flow.compactingDeliveryKg, accent: "is-dyeing", icon: Droplets },
     { key: "compacting", label: "After compacting", value: flow.officeDeliveryKg, accent: "is-compacting", icon: Sparkles },
   ];
   const max = Math.max(yarn, ...rows.map((r) => r.value ?? 0)) || 1;
   const now = flow.metrics.currentWeightKg;
-  const yieldPct = yarn ? (now / yarn) * 100 : 0;
+  // While knitting nothing is lost yet: the fabric so far is weighed against the yarn used once it finishes.
+  const knittingNow = isKnitting(flow);
+  const yieldPct = yarn && !knittingNow ? (now / yarn) * 100 : 0;
   const change = now - yarn;
   const delivered = flow.finalDeliveredKg ?? 0;
   const compacted = flow.officeDeliveryKg;
 
   const costs = [
-    { label: "Yarn", value: flow.metrics.yarnAmount, accent: "is-yarn" },
+    { label: flow.parent ? `Grey fabric · ${flow.parent.flowNo}` : "Yarn", value: flow.metrics.yarnAmount, accent: "is-yarn" },
     { label: "Knitting", value: flow.knittingExpense, accent: "is-knitting" },
     { label: "Dyeing", value: flow.dyeingExpense, accent: "is-dyeing" },
     { label: "Compacting", value: flow.compactingExpense, accent: "is-compacting" },
     { label: "Delivery & other", value: flow.otherExpense + flow.purchaseOtherCost, accent: "is-other" },
+    // A knitting batch's cost moves with its grey fabric into its dyeing lots.
+    ...(flow.metrics.lots ? [{ label: `Into ${flow.metrics.lots.count} dyeing lot${flow.metrics.lots.count === 1 ? "" : "s"}`, value: -flow.metrics.lots.allocatedCost, accent: "is-other" }] : []),
   ];
   const spent = flow.metrics.totalSpent || costs.reduce((total, c) => total + c.value, 0);
 
@@ -1442,8 +1167,9 @@ function BatchCalculation({ flow, active }: { flow: FabricFlow; active: StageKey
         <div className="min-w-0">
           <p className="production-calc__eyebrow">Weight now</p>
           <p className="production-calc__big">{kg(now)}</p>
-          <p className="text-xs text-gray-500">of {kg(yarn)} {flow.yarnItemCode ? "yarn used" : "yarn purchased"}</p>
-          <div className="mt-2"><ChangeChip diff={yarn ? change : null} /></div>
+          <p className="text-xs text-gray-500">of {kg(yarn)} {flow.parent ? "grey fabric" : knittingNow ? "yarn given · knitting" : flow.yarnItemCode ? "yarn used" : "yarn purchased"}</p>
+          {(flow.metrics.yarnReturnedKg ?? 0) > 0.0005 && <p className="text-[11px] font-semibold text-sky-700">{kg(flow.metrics.yarnReturnedKg ?? 0)} yarn back in the warehouse · not a loss</p>}
+          <div className="mt-2"><ChangeChip diff={yarn && !knittingNow ? change : null} /></div>
         </div>
       </div>
 

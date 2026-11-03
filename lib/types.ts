@@ -30,7 +30,20 @@ export type DashboardData = {
   isAdmin: boolean;
   production: {
     stages: Array<{ key: "PURCHASED" | "KNITTING" | "DYEING" | "COMPACTING" | "AT_OFFICE"; count: number }>;
+    /** Every open batch per stage (not only the listed ones): weight, oldest, how many stuck, and where they are. */
+    board: Array<{
+      key: "PURCHASED" | "KNITTING" | "DYEING" | "COMPACTING" | "AT_OFFICE";
+      count: number;
+      kg: number;
+      oldestDays: number;
+      stuck: number;
+      places: Array<{ name: string; count: number; kg: number; oldest: number }>;
+    }>;
     active: number;
+    /** Current weight of every open batch. */
+    inProcessKg: number;
+    /** Weight lost in process on batches past knitting, weighted by yarn started; null when none yet. */
+    processLossPct: number | null;
     readyKg: number;
     /** Finished fabric delivered to parties (not into own warehouses). */
     deliveredThisMonth: { count: number; kg: number; amount: number | null };
@@ -53,12 +66,16 @@ export type DashboardData = {
     total: number;
     byStatus: Record<string, number>;
     knitting: number;
-    yarnOnMachinesKg: number;
-    finishedToday: { count: number; kg: number };
+    /** Fabric knitted so far by the machines knitting now. */
+    knittedOnRunningKg: number;
+    /** The last production day recorded at day end. */
+    lastDay: { date: string; machines: number; kg: number; rolls: number } | null;
     knittingTasks: number;
-    running: Array<{ id: string; runNo: string; machineId: string; machine: string; startedAt: string; startShift: "DAY" | "NIGHT"; yarnKg: number }>;
+    running: Array<{ id: string; runNo: string; machineId: string; machine: string; startedAt: string; startShift: "DAY" | "NIGHT"; knittedKg: number }>;
   };
   trend: Array<{ date: string; yarnInKg: number; knittedKg: number; deliveredKg: number; soldKg: number }>;
+  /** Totals for the period of the same length just before the trend. */
+  trendPrevious: { yarnInKg: number; knittedKg: number; deliveredKg: number; soldKg: number };
   stockKg: Record<"YARN" | "GREY_FABRIC" | "DYED_FABRIC" | "FINISHED_FABRIC", number>;
   purchases: {
     open: number;
@@ -66,7 +83,12 @@ export type DashboardData = {
     toArriveValue: number | null;
     next: Array<{ id: string; poNo: string; supplier: string; expectedDate: string | null }>;
   };
-  awaitingFabric: { count: number; kg: number };
+  awaitingFabric: {
+    count: number;
+    kg: number;
+    /** The longest waiting deliveries. */
+    next: Array<{ id: string; flowNo: string; warehouseId: string | null; warehouse: string; kg: number; deliveredAt: string }>;
+  };
   sales: {
     waiting: number;
     sentBack: number;
@@ -97,7 +119,8 @@ export type DashboardData = {
     /** The same calculation as the Money and Finance pages. */
     month: { moneyIn: number; receivedTotal: number; collected: number; moneyOut: number; paidTotal: number; supplierPaid: number; otherPaid: number; expenses: number; net: number };
   } | null;
-  attention: Array<{ tone: "danger" | "warning" | "info"; text: string; href: string }>;
+  /** `kind` (what it is about, for its icon) is missing from figures saved before it was added. */
+  attention: Array<{ tone: "danger" | "warning" | "info"; kind?: import("./attention").AttentionKind; text: string; href: string }>;
   alerts: Array<{
     id: string;
     title: string;

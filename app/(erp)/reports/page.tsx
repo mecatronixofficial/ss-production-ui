@@ -1,11 +1,12 @@
 "use client";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import {
   AlertTriangle,
   BarChart3,
   Boxes,
+  Clock3,
   CalendarRange,
   Download,
   Factory,
@@ -18,13 +19,16 @@ import {
   PackageCheck,
   ReceiptIndianRupee,
   RefreshCw,
+  Trophy,
   Search,
   Wrench,
   X,
   type LucideIcon,
 } from "lucide-react";
 import { apiDownload } from "@/lib/api";
-import { useApiQuery } from "@/lib/use-api-query";
+import { prefetchApi, useApiQuery } from "@/lib/use-api-query";
+import type { AttentionKind } from "@/lib/attention";
+import { useAuth } from "@/components/auth-provider";
 import { cn, formatDate, formatDateTime, humanize, kg, money } from "@/lib/utils";
 import { DataTable } from "@/components/data-table";
 import { Badge, statusTone } from "@/components/ui/badge";
@@ -42,6 +46,8 @@ type Report = CatalogItem & {
   rows: Row[];
   summary: Array<{ label: string; value: number | string; type: ColumnType; hint?: string }>;
   totals: Record<string, number>;
+  /** The name and figure columns of the "top" chart; null for none (missing from an older server: worked out here). */
+  top?: { label: string; value: string } | null;
   note?: string;
   truncated: boolean;
   generatedAt: string;
@@ -70,6 +76,33 @@ const PRESETS: Array<{ value: Preset; label: string }> = [
   { value: "all", label: "All time" },
   { value: "custom", label: "Custom…" },
 ];
+/** Each group in the colour of what it is about, as on the Dashboard and every alert (lib/attention.ts). */
+const GROUP_KIND: Record<string, AttentionKind> = {
+  Sales: "sales",
+  Production: "production",
+  Purchases: "purchases",
+  Inventory: "warehouse",
+  Machines: "machines",
+  Finance: "money",
+};
+/** The reports this viewer opened last, newest first (kept in this browser only). */
+const RECENT_KEY = "erp:reports:recent";
+const RECENT_COUNT = 4;
+const readRecent = (): string[] => {
+  try {
+    const list = JSON.parse(localStorage.getItem(RECENT_KEY) ?? "[]");
+    return Array.isArray(list) ? list.filter((v): v is string => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
+};
+/** Today as yyyy-mm-dd on this computer's calendar (IST), for file names. */
+const todayStamp = () => {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+/** Rows in the "top" chart above the table. */
+const TOP_ROWS = 8;
 const DEFAULT_REPORT = "monthly-summary";
 const DEFAULT_PRESET: Preset = "this-fy";
 
@@ -175,15 +208,18 @@ function ReportTable({ report }: { report: Report }) {
           if (negative(v, c.type)) return <span className="rpt-negative">{formatValue(v, c.type)}</span>;
           return formatValue(v, c.type);
         },
-        // Totals follow the search box, so they always match the rows shown.
+        // Totals follow the search box, so they always match the rows shown; with no search, the server's total, which
+        // also covers rows past the 5,000 shown.
         footer: ({ table }) => {
           if (index === 0) return "Total";
-          if (!c.total) return null;
-          const sum = table.getFilteredRowModel().rows.reduce((acc, r) => acc + Number(r.original[c.key] ?? 0), 0);
+          if (!c.total || c.type === "pct") return null;
+          const sum = !table.getState().globalFilter && report.totals[c.key] !== undefined
+            ? report.totals[c.key]
+            : table.getFilteredRowModel().rows.reduce((acc, r) => acc + Number(r.original[c.key] ?? 0), 0);
           return <span className={cn(negative(sum, c.type) && "rpt-negative")}>{formatValue(sum, c.type)}</span>;
         },
       })),
-    [report.columns],
+    [report.columns, report.totals],
   );
 
   return (
@@ -214,6 +250,67 @@ function ReportTable({ report }: { report: Report }) {
   );
 }
 
+/**
+ * The largest rows of a report by its main figure (the first money or KG column with a total), as bars with their share
+ * of the total: who bought most, which yarn, which machine… Shown when the report has a name column and a few rows.
+ */
+function TopRows({ report }: { report: Report }) {
+  // The server names the columns for each report (party by bill total, machine by fabric…).
+  const chosen = report.top;
+  const label = chosen === null ? undefined : chosen ? report.columns.find((c) => c.key === chosen.label) : report.columns.find((c) => c.type === "text");
+  const figure =
+    chosen === null
+      ? undefined
+      : chosen
+        ? report.columns.find((c) => c.key === chosen.value)
+        : (report.columns.find((c) => c.total && (c.type === "money" || c.type === "kg")) ?? report.columns.find((c) => c.total && c.type !== "pct"));
+  const rows = useMemo(() => {
+    if (!label || !figure) return [];
+    // Rows with the same name (a party with many bills…) add up.
+    const byName = new Map<string, number>();
+    for (const row of report.rows) {
+      const name = String(row[label.key] ?? "—");
+      byName.set(name, (byName.get(name) ?? 0) + Number(row[figure.key] ?? 0));
+    }
+    return [...byName].filter(([, v]) => v > 0).sort((a, b) => b[1] - a[1]);
+  }, [report.rows, label, figure]);
+  if (!label || !figure || rows.length < 2) return null;
+  const total = rows.reduce((sum, [, v]) => sum + v, 0);
+  const top = rows.slice(0, TOP_ROWS);
+  const max = top[0][1];
+  return (
+    <section className="rpt-top" aria-label={`Top ${label.label} by ${figure.label}`}>
+      <header>
+        <span className="rpt-top__icon"><Trophy size={14} /></span>
+        <p>{figure.label} by {label.label.toLowerCase()} · top {Math.min(TOP_ROWS, rows.length)}</p>
+        <span className="ml-auto text-[11px] text-gray-400">{rows.length > TOP_ROWS ? `of ${rows.length.toLocaleString("en-IN")} · ` : ""}{Math.round((top.reduce((sum, [, v]) => sum + v, 0) / total) * 100)}% of the total</span>
+      </header>
+      <ol>
+        {top.map(([name, value], i) => (
+          <li key={name}>
+            <span className="rpt-top__rank">{i + 1}</span>
+            <span className="rpt-top__name" title={name}>{name}</span>
+            <span className="rpt-top__bar" aria-hidden><span style={{ width: `${max ? (value / max) * 100 : 0}%` }} /></span>
+            <b>{formatValue(value, figure.type)}</b>
+            <span className="rpt-top__share">{total ? `${((value / total) * 100).toFixed(1)}%` : ""}</span>
+          </li>
+        ))}
+      </ol>
+    </section>
+  );
+}
+
+/** The report area's shape while a report loads for the first time. */
+function ReportSkeleton() {
+  return (
+    <div className="space-y-3" role="status" aria-label="Loading report">
+      <div className="grid grid-cols-2 gap-2.5 lg:grid-cols-4">{[0, 1, 2, 3].map((i) => <div key={i} className="h-[76px] animate-pulse rounded-[14px] bg-gray-200/60" />)}</div>
+      <div className="h-40 animate-pulse rounded-2xl bg-gray-200/60" />
+      <div className="h-72 animate-pulse rounded-2xl bg-gray-200/60" />
+    </div>
+  );
+}
+
 export default function Reports() {
   const params = useSearchParams();
   const router = useRouter();
@@ -226,8 +323,11 @@ export default function Reports() {
   const customTo = isDateInput(params.get("to")) ? params.get("to")! : "";
   const [navFilter, setNavFilter] = useState("");
   const [downloading, setDownloading] = useState<"xlsx" | "pdf" | null>(null);
+  const { user } = useAuth();
+  const [recent, setRecent] = useState<string[]>([]);
 
-  const catalog = useApiQuery<CatalogItem[]>("/reports");
+  // The list of reports rarely changes: kept for the browser tab, so the page opens at once.
+  const catalog = useApiQuery<CatalogItem[]>("/reports", { persist: user?.id });
   const info = catalog.data?.find((r) => r.key === selected) ?? catalog.data?.[0];
   const usesDates = info ? info.dateLabel !== null : true;
 
@@ -241,6 +341,26 @@ export default function Reports() {
   }, [range, usesDates]);
   const customInvalid = preset === "custom" && Boolean(customFrom && customTo && customFrom > customTo);
   const report = useApiQuery<Report>(info && !customInvalid ? `/reports/${info.key}?${query}` : null);
+  /** The same dates for another report (a report "as of today" takes none), to start loading it on hover. */
+  const pathFor = (r: CatalogItem) => `/reports/${r.key}?${r.dateLabel === null ? "" : (() => {
+    const q = new URLSearchParams();
+    if (range.from) q.set("from", range.from.toISOString());
+    if (range.to) q.set("to", range.to.toISOString());
+    return q;
+  })()}`;
+
+  // Remember the report opened, newest first (read after mount: the server render has no storage).
+  const openedKey = info?.key;
+  useEffect(() => {
+    if (!openedKey) return;
+    const next = [openedKey, ...readRecent().filter((k) => k !== openedKey)].slice(0, RECENT_COUNT);
+    setRecent(next);
+    try {
+      localStorage.setItem(RECENT_KEY, JSON.stringify(next));
+    } catch {
+      // Storage blocked: the Recent list just stays empty.
+    }
+  }, [openedKey]);
 
   const setParams = (patch: Record<string, string | null>) => {
     const next = new URLSearchParams(params.toString());
@@ -258,7 +378,7 @@ export default function Reports() {
     if (!info) return;
     setDownloading(format);
     try {
-      await apiDownload(`/reports/${info.key}/export.${format}?${query}`, `${info.key}-report-${new Date().toISOString().slice(0, 10)}.${format}`);
+      await apiDownload(`/reports/${info.key}/export.${format}?${query}`, `${info.key}-report-${todayStamp()}.${format}`);
     } catch {
       // api() already showed the error.
     } finally {
@@ -284,6 +404,8 @@ export default function Reports() {
   if (!catalog.data || !info) return <Loading />;
 
   const GroupIcon = grouped.find((g) => g.name === info.group)?.icon ?? BarChart3;
+  const kindOf = (group: string) => GROUP_KIND[group] ?? "production";
+  const recentReports = recent.filter((k) => k !== info.key).map((k) => catalog.data?.find((r) => r.key === k)).filter((r): r is CatalogItem => !!r);
   const data = report.data?.key === info.key ? report.data : undefined;
   const customEmpty = preset === "custom" && !customFrom && !customTo;
 
@@ -315,9 +437,20 @@ export default function Reports() {
             )}
           </label>
           <nav className="flex flex-col gap-[.55rem]">
+            {!navFilter.trim() && recentReports.length > 0 && (
+              <div className="rpt-nav__group">
+                <p className="rpt-nav__group-title"><Clock3 size={13} aria-hidden /> Recent</p>
+                {recentReports.map((r) => (
+                  <button key={r.key} type="button" onClick={() => choose(r.key)} onPointerEnter={() => prefetchApi(pathFor(r))} title={r.description} className="rpt-nav__item">
+                    <span className={cn("rpt-nav__dot", `is-${kindOf(r.group)}`)} aria-hidden />
+                    {r.title}
+                  </button>
+                ))}
+              </div>
+            )}
             {visibleGroups.map(({ name, icon: Icon, reports }) => (
               <div key={name} className="rpt-nav__group">
-                <p className="rpt-nav__group-title">
+                <p className={cn("rpt-nav__group-title", `is-${kindOf(name)}`)}>
                   <Icon size={13} aria-hidden /> {name}
                 </p>
                 {reports.map((r) => (
@@ -325,6 +458,8 @@ export default function Reports() {
                     key={r.key}
                     type="button"
                     onClick={() => choose(r.key)}
+                    // Pointing at a report starts loading it for the dates picked.
+                    onPointerEnter={() => prefetchApi(pathFor(r))}
                     title={r.description}
                     aria-current={r.key === info.key ? "page" : undefined}
                     className={cn("rpt-nav__item", r.key === info.key && "is-active")}
@@ -341,7 +476,7 @@ export default function Reports() {
 
       <section className="rpt-main" aria-labelledby="report-title">
         <header className="rpt-head">
-          <span className="rpt-head__icon">
+          <span className={cn("rpt-head__icon", `is-${kindOf(info.group)}`)}>
             <GroupIcon size={18} />
           </span>
           <div className="min-w-0 flex-1">
@@ -412,7 +547,7 @@ export default function Reports() {
         ) : !data && report.error ? (
           <ErrorState message={report.error} onRetry={() => void report.reload()} />
         ) : !data ? (
-          <Loading />
+          <ReportSkeleton />
         ) : (
           <div className={cn("rpt-body", report.loading && "is-loading")} aria-busy={report.loading}>
             {report.error && (
@@ -436,6 +571,7 @@ export default function Reports() {
                 <AlertTriangle size={14} /> Only the first 5,000 rows are included. Choose a shorter date range for the complete list.
               </p>
             )}
+            <TopRows report={data} />
             <ReportTable key={data.key} report={data} />
             <footer className="rpt-foot">
               {data.note && (

@@ -11,7 +11,7 @@ import { Loading } from "@/components/loading";
 import { Empty } from "@/components/empty";
 import { ItemDetailsView } from "../item-details";
 
-/** `/warehouses/item?code=SS-2026-001&warehouse=<id>`: one item code's full details. */
+/** `/warehouses/item?code=01SS26&warehouse=<id>`: one item code's full details. */
 function ItemPage() {
   const params = useSearchParams();
   const router = useRouter();

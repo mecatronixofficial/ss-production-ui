@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { Boxes, Factory, History, Layers, ReceiptIndianRupee, ShoppingCart, Warehouse as WarehouseIcon } from "lucide-react";
+import { Boxes, Factory, History, Layers, ReceiptIndianRupee, Route, ShoppingCart, Warehouse as WarehouseIcon } from "lucide-react";
 import { qs } from "@/lib/api";
 import { STATUS_LABEL, statusTone, type PurchaseStatus } from "@/lib/purchases";
 import type { StockCategory } from "@/lib/types";
@@ -12,6 +12,8 @@ import { Badge } from "@/components/ui/badge";
 import { Loading } from "@/components/loading";
 import { ErrorState } from "@/components/page-state";
 import { BatchJourney, ItemSummary, RunsTable, SalesTable, type JourneyBatch, type JourneyRun, type JourneySale, type MovementTotal } from "./item-journey";
+import { YarnStorySection, type YarnStory } from "./yarn-story";
+import { ReceiveCheck } from "@/components/ui/receive-check";
 
 type ItemDetails = {
   itemCode: string;
@@ -34,8 +36,25 @@ type ItemDetails = {
     quantity: number;
     unit: string;
     rate: number;
-    receipts: Array<{ receiptNo: string; receivedAt: string; lotNo: string | null; warehouse: { code: string }; quantity: number }>;
+    /** Its details as ordered (count, quality, shade…). */
+    specs: Array<{ label: string; value: string }>;
+    receipts: Array<{
+      receiptNo: string;
+      receivedAt: string;
+      lotNo: string | null;
+      challanNo: string | null;
+      warehouse: { code: string };
+      quantity: number;
+      /** What was checked on arrival. */
+      dcQuantity: number | null;
+      packages: string | null;
+      packageCount: number | null;
+      details: string | null;
+      checks: Array<{ label: string; ordered: string; ok: boolean; received?: string }>;
+    }>;
   }>;
+  /** What the item is: count, quality, shade… as ordered; fabric type, dia, GSM, colour… as made; mill and DC for yarn received. */
+  specs: Array<{ label: string; value: string }>;
   movements: Array<{
     id: string;
     createdAt: string;
@@ -81,6 +100,8 @@ type ItemDetails = {
   runs: JourneyRun[];
   /** Sales of the code and of fabric made from it. */
   sales: JourneySale[];
+  /** The yarn behind the code (itself, or the yarn a batch, lot or run was made from), receipt to delivery. */
+  yarnStory: YarnStory | null;
 };
 
 const EMPTY = 0.0005;
@@ -130,6 +151,13 @@ export function ItemDetailsView({ itemCode, currentWarehouseId, showPrices = tru
           </h2>
           <p className="text-sm font-semibold text-gray-700">{data.itemName}</p>
           {data.otherNames.length > 0 && <p className="text-xs text-gray-400">Also entered as {data.otherNames.join(", ")}</p>}
+          {data.specs.length > 0 && (
+            <dl className="item-specs">
+              {data.specs.map((s) => (
+                <div key={s.label}><dt>{s.label}</dt><dd>{s.value}</dd></div>
+              ))}
+            </dl>
+          )}
         </div>
       </div>
 
@@ -192,6 +220,16 @@ export function ItemDetailsView({ itemCode, currentWarehouseId, showPrices = tru
         )}
       </Section>
 
+      {data.yarnStory && (
+        <Section
+          icon={Route}
+          title={data.yarnStory.code === data.itemCode ? `Yarn story · ${data.yarnStory.code}` : `Made from yarn ${data.yarnStory.code}`}
+          caption="How much yarn came in and was used, which fabrics were knitted from it, every colour (sub-code), and the weight at each step: loss, equal or gain."
+        >
+          <YarnStorySection story={data.yarnStory} />
+        </Section>
+      )}
+
       <ItemSummary totals={data.totals} />
 
       {data.journey.length > 0 && (
@@ -243,14 +281,37 @@ export function ItemDetailsView({ itemCode, currentWarehouseId, showPrices = tru
                 <p className="mt-1 text-xs text-gray-600">
                   {quantity(line.quantity, line.unit)}{showPrices && <> at {money(line.rate)} / {line.unit} = <strong>{money(line.quantity * line.rate)}</strong></>}
                 </p>
+                {line.specs.length > 0 && (
+                  <p className="mt-1 flex flex-wrap gap-1">
+                    <span className="text-[11px] font-semibold text-gray-500">Ordered as</span>
+                    {line.specs.map((s) => <span key={s.label} className="rounded-full bg-[#eef4f8] px-2 text-[11px] font-semibold text-[#35546b]">{s.label} {s.value}</span>)}
+                  </p>
+                )}
                 {line.receipts.length > 0 && (
-                  <ul className="mt-1.5 space-y-0.5 text-xs text-gray-600">
-                    {line.receipts.map((r) => (
-                      <li key={r.receiptNo} className="flex flex-wrap justify-between gap-2">
-                        <span>{r.receiptNo} · {formatDate(r.receivedAt)} · {r.warehouse.code}{r.lotNo ? ` · lot ${r.lotNo}` : ""}</span>
-                        <span className="font-semibold">{quantity(r.quantity, line.unit)}</span>
-                      </li>
-                    ))}
+                  <ul className="mt-2 space-y-1.5 text-xs text-gray-600">
+                    {line.receipts.map((r) => {
+                      const off = r.checks.filter((c) => !c.ok);
+                      return (
+                        <li key={r.receiptNo} className="rounded-lg bg-gray-50 px-2.5 py-1.5">
+                          <p className="flex flex-wrap justify-between gap-2">
+                            <span>{r.receiptNo} · {formatDate(r.receivedAt)} · {r.warehouse.code}{r.challanNo ? ` · DC ${r.challanNo}` : ""}{r.lotNo ? ` · lot ${r.lotNo}` : ""}</span>
+                            <span className="font-semibold">{quantity(r.quantity, line.unit)}</span>
+                          </p>
+                          {(r.dcQuantity !== null || r.packages || r.details || r.checks.length > 0) && (
+                            <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-1">
+                              {r.dcQuantity !== null && <span>On DC {quantity(r.dcQuantity, line.unit)} <ReceiveCheck sent={r.dcQuantity} received={r.quantity} unit={line.unit.toUpperCase()} /></span>}
+                              {r.packages && <span>· {r.packages}{r.packageCount !== null && r.packages !== String(r.packageCount) ? ` = ${r.packageCount}` : ""} bags / rolls</span>}
+                              {r.details && <span>· {r.details}</span>}
+                              {r.checks.length > 0 && (off.length ? (
+                                <span className="font-semibold text-rose-700">· Differs: {off.map((c) => `${c.label} ordered ${c.ordered}, came ${c.received || "different"}`).join("; ")}</span>
+                              ) : (
+                                <span className="font-semibold text-emerald-700">· All {r.checks.length} details as ordered</span>
+                              ))}
+                            </p>
+                          )}
+                        </li>
+                      );
+                    })}
                   </ul>
                 )}
               </li>

@@ -7,6 +7,7 @@ import {
   History,
   Landmark,
   PackageCheck,
+  PackagePlus,
   ReceiptIndianRupee,
   Settings,
   ShieldCheck,
@@ -59,6 +60,7 @@ export const NAV_SECTIONS: NavSection[] = [
   {
     title: "Stock & Assets",
     items: [
+      { href: "/yarn-received", label: "Yarn Received", description: "Every yarn delivery by its mill DC: count, bags and weight; each count gets its own yarn code.", icon: PackagePlus, roles: GODOWN },
       { href: "/warehouses", label: "Warehouses", description: "Stock in each warehouse, with every in and out movement. “View all warehouses” to add or edit them.", icon: Warehouse, roles: GODOWN },
       { href: "/masters/machines", label: "Machines", description: "Knitting machines, day and night: load yarn by code, take the fabric off into stock, with its cost.", icon: Wrench, roles: MANAGERS },
     ],

@@ -4,7 +4,7 @@ import Link from "next/link";
 import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import type { ColumnDef } from "@tanstack/react-table";
 import * as Dialog from "@radix-ui/react-dialog";
-import { AlertTriangle, ArrowDownLeft, ArrowUpRight, Check, Download, Eye, Layers, Pencil, Plus, Scale, Search, Trash2, Warehouse as WarehouseIcon, X } from "lucide-react";
+import { AlertTriangle, ArrowDownLeft, ArrowUpRight, Boxes, Check, Clock3, Download, Droplets, Eye, FlaskConical, Layers, Package, PackageCheck, Pencil, Plus, Scale, Search, Shapes, Trash2, Warehouse as WarehouseIcon, X, type LucideIcon } from "lucide-react";
 import { parseSort, sortRows, SortMenu } from "./sort-menu";
 import { DatePick } from "./date-pick";
 import { api, qs } from "@/lib/api";
@@ -17,7 +17,7 @@ import type { StockCategory, Warehouse } from "@/lib/types";
 import { useApiAction } from "@/lib/use-api-action";
 import { useApiQuery } from "@/lib/use-api-query";
 import { useNewParam } from "@/lib/use-new-param";
-import { quantity, stockText } from "@/lib/warehouses";
+import { MATERIAL_COLORS, quantity, stockText } from "@/lib/warehouses";
 import { cn, formatDate, formatDateTime, humanize, kg, money, todayInput, toNumber, unitQty } from "@/lib/utils";
 import { useAuth } from "@/components/auth-provider";
 import { DataTable, serialColumn } from "@/components/data-table";
@@ -33,6 +33,7 @@ import { WeightInput } from "@/components/ui/weight-input";
 import { Loading } from "@/components/loading";
 import { ErrorState } from "@/components/page-state";
 import { itemHref } from "./item-details";
+import { YarnAtKnitting } from "./yarn-at-knitting";
 import { ReceiveFabricDialog, type IncomingFabric } from "./receive-fabric-dialog";
 import { DispatchDialog } from "./dispatch-dialog";
 import { ActionCenter } from "./action-center";
@@ -60,6 +61,34 @@ const unitTotalsText = <T extends { unit: string }>(rows: T[], pick: (row: T) =>
   for (const row of rows) totals[row.unit] = (totals[row.unit] ?? 0) + pick(row);
   return stockText({ totals }) === "Empty" ? "0.000 KG" : stockText({ totals });
 };
+/** Each material's icon and colour (the tiles, the stock mix bar and its legend). */
+const MATERIAL: Record<StockCategory, { icon: LucideIcon; color: string }> = {
+  YARN: { icon: Boxes, color: MATERIAL_COLORS.YARN },
+  GREY_FABRIC: { icon: Layers, color: MATERIAL_COLORS.GREY_FABRIC },
+  DYED_FABRIC: { icon: Droplets, color: MATERIAL_COLORS.DYED_FABRIC },
+  FINISHED_FABRIC: { icon: PackageCheck, color: MATERIAL_COLORS.FINISHED_FABRIC },
+  RAW_MATERIAL: { icon: Shapes, color: MATERIAL_COLORS.RAW_MATERIAL },
+  CHEMICAL: { icon: FlaskConical, color: MATERIAL_COLORS.CHEMICAL },
+  PACKING: { icon: Package, color: MATERIAL_COLORS.PACKING },
+} as Record<StockCategory, { icon: LucideIcon; color: string }>;
+/** Stock that hasn't moved in or out for this many days is pointed out (and can be listed on its own). */
+const IDLE_DAYS = 60;
+const daysSince = (value?: string | null) => {
+  if (!value) return null;
+  const from = new Date(value);
+  from.setHours(0, 0, 0, 0);
+  const now = new Date();
+  now.setHours(0, 0, 0, 0);
+  return Math.max(0, Math.round((now.getTime() - from.getTime()) / 86_400_000));
+};
+/** A timestamp as a day on this computer's calendar (IST), not UTC's. */
+const dayOf = (value: string) => {
+  const d = new Date(value);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+};
+/** Positive KG held (other units can't be added to it). */
+const heldKg = (rows: Array<{ unit: string; balanceKg: number }>) => rows.reduce((sum, row) => sum + (row.unit.toUpperCase() === "KG" && row.balanceKg > 0 ? row.balanceKg : 0), 0);
+
 /** Entries made on this page; other movements were posted by another module (e.g. purchase receipts). */
 const GODOWN_ENTRY = "GODOWN_ENTRY";
 
@@ -275,9 +304,11 @@ function EntryDialog({
   }, [balances]);
   const typedName = f.itemName.trim().toLowerCase();
   const matched = items.find((item) => item.itemName.toLowerCase() === typedName);
+  // Yarn received (bought or opening stock) gets a code of its own (01SS26…) when saved, followed through production.
+  const newYarnCode = !editing && f.category === "YARN" && f.direction === "IN" && (f.txnType === "PURCHASE_IN" || f.txnType === "OPENING");
   // Keep an edited entry's code while its name is unchanged, so it stays on the same stock row.
   const itemCode =
-    editing && editing.category === f.category && editing.itemName.toLowerCase() === typedName ? editing.itemCode : matched?.itemCode;
+    editing && editing.category === f.category && editing.itemName.toLowerCase() === typedName ? editing.itemCode : newYarnCode ? undefined : matched?.itemCode;
   const lots = useMemo(
     () => [...new Set(balances.filter((row) => row.itemCode === itemCode && row.lotNo).map((row) => row.lotNo as string))],
     [balances, itemCode],
@@ -385,7 +416,7 @@ function EntryDialog({
             </div>
 
             <div className="grid gap-3 sm:grid-cols-2">
-              <Field label="Item *" hint={itemCode ? itemCode : f.itemName.trim() ? "New item" : undefined}>
+              <Field label="Item *" hint={newYarnCode ? "New yarn code (01SS26…) on save" : itemCode ? itemCode : f.itemName.trim() ? "New item" : undefined}>
                 <Input
                   value={f.itemName}
                   maxLength={120}
@@ -516,6 +547,8 @@ function Warehouses() {
   const [hideEmpty, setHideEmpty] = useState(true);
   /** Stock view narrowed to positions below zero, from the "Negative balances" tile. */
   const [onlyNegative, setOnlyNegative] = useState(false);
+  /** Stock view narrowed to items that haven't moved for IDLE_DAYS. */
+  const [onlyIdle, setOnlyIdle] = useState(false);
   const [mode, setMode] = useState<EntryMode | null>(null);
   /** The bill open in the print window, the movement whose bill is being issued, and the "without a bill" filter. */
   const [billOpen, setBillOpen] = useState<string | null>(null);
@@ -536,7 +569,8 @@ function Warehouses() {
     router.replace(`${pathname}${next.size ? `?${next}` : ""}`, { scroll: false });
   };
 
-  const { data: warehouseList, reload: reloadWarehouses } = useApiQuery<Warehouse[]>("/masters/warehouses");
+  // The warehouses and this one's stock are kept for the browser tab, so coming back (or reloading) shows them at once.
+  const { data: warehouseList, reload: reloadWarehouses } = useApiQuery<Warehouse[]>("/masters/warehouses", { persist: user?.id });
   const warehouses = useMemo(() => warehouseList ?? [], [warehouseList]);
   const selectedWarehouse = showAll ? undefined : warehouses.find((w) => w.id === warehouseParam);
   const warehouseId = selectedWarehouse?.id ?? "";
@@ -560,7 +594,7 @@ function Warehouses() {
   }, [warehouseId]);
 
   // Every material's balances in this warehouse (for the totals row); the stock table shows the chosen one.
-  const balances = useApiQuery<Balance[]>(warehouseId ? `/inventory/balances${qs({ warehouseId })}` : null);
+  const balances = useApiQuery<Balance[]>(warehouseId ? `/inventory/balances${qs({ warehouseId })}` : null, { persist: user?.id });
   const history = useApiQuery<Txn[]>(
     warehouseId && view === "history" ? `/inventory/ledger${qs({ category, itemCode, lotNo, warehouseId, from: dayStart(from), to: dayEnd(to) })}` : null,
   );
@@ -601,7 +635,8 @@ function Warehouses() {
     () => sortRows(bills.data?.bills ?? [], sort, (b) => ({ date: b.createdAt, name: b.partyName ?? b.source.label, code: b.billNo })),
     [bills.data, sort],
   );
-  const billCount = useApiQuery<{ unbilled: number }>(warehouseId && canManageWarehouses ? `/inventory/bills${qs({ warehouseId })}` : null);
+  // Only how many movements have no challan: loading the whole challan list for one number was the page's heaviest request.
+  const billCount = useApiQuery<{ unbilled: number }>(warehouseId && canManageWarehouses ? `/inventory/bills/unbilled-count${qs({ warehouseId })}` : null);
   // Purchase orders being delivered here: shown as "waiting to receive", and received from this page.
   const incoming = useApiQuery<PurchaseOrder[]>(warehouseId ? `/procurement/incoming${qs({ warehouseId })}` : null);
   const [receivingPo, setReceivingPo] = useState<string | null>(null);
@@ -629,22 +664,34 @@ function Warehouses() {
           total: totalsText(rows),
           negative: rows.some((row) => row.balanceKg < -EMPTY),
           items: rows.filter((row) => Math.abs(row.balanceKg) > EMPTY).length,
+          kg: heldKg(rows),
+          idle: rows.filter((row) => row.balanceKg > EMPTY && (daysSince(row.lastMovedAt) ?? 0) > IDLE_DAYS).length,
         };
       }),
     [shownCategories, stockRows],
   );
   const negatives = stockRows.filter((row) => row.balanceKg < -EMPTY);
+  const totalKg = heldKg(stockRows);
+  const idleRows = stockRows.filter((row) => row.category === category && row.balanceKg > EMPTY && (daysSince(row.lastMovedAt) ?? 0) > IDLE_DAYS);
   const visibleStock = useMemo(
     () =>
       sortRows(
         stockRows.filter(
-          (row) => row.category === category && (onlyNegative ? row.balanceKg < -EMPTY : !hideEmpty || Math.abs(row.balanceKg) > EMPTY),
+          (row) =>
+            row.category === category &&
+            (onlyNegative
+              ? row.balanceKg < -EMPTY
+              : onlyIdle
+                ? row.balanceKg > EMPTY && (daysSince(row.lastMovedAt) ?? 0) > IDLE_DAYS
+                : !hideEmpty || Math.abs(row.balanceKg) > EMPTY),
         ),
         sort,
         (row) => ({ date: row.lastMovedAt, name: row.itemName, code: `${row.itemCode} ${row.lotNo ?? ""}` }),
       ),
-    [stockRows, category, hideEmpty, onlyNegative, sort],
+    [stockRows, category, hideEmpty, onlyNegative, onlyIdle, sort],
   );
+  /** The largest balance shown, for each row's bar. */
+  const maxBalance = useMemo(() => visibleStock.reduce((max, row) => Math.max(max, row.balanceKg), 0), [visibleStock]);
   const totalStock = totalsText(visibleStock);
   const visibleHistory = useMemo(
     () =>
@@ -716,11 +763,13 @@ function Warehouses() {
 
   const chooseCategory = (value: StockCategory) => {
     setOnlyNegative(false);
+    setOnlyIdle(false);
     setParams({ category: value, itemCode: "", lotNo: "" });
   };
   /** Shows the items below zero, in the material of the first one if the current material has none. */
   const showNegatives = () => {
     if (!negatives.length) return;
+    setOnlyIdle(false);
     setOnlyNegative(true);
     const next = negatives.some((row) => row.category === category) ? category : negatives[0].category;
     setParams({ category: next, view: "", itemCode: "", lotNo: "" });
@@ -732,14 +781,14 @@ function Warehouses() {
     if (view === "stock") {
       downloadCsv(
         `stock-${stamp}.csv`,
-        ["Item code", "Item name", "Material", "Lot", "In", "Out", "Balance", "Unit"],
-        visibleStock.map((r) => [r.itemCode, r.itemName, humanize(r.category), r.lotNo ?? "", r.quantityIn.toFixed(3), r.quantityOut.toFixed(3), r.balanceKg.toFixed(3), r.unit]),
+        ["Item code", "Item name", "Material", "Lot", "In", "Out", "Balance", "Unit", "Last moved", "Days since"],
+        visibleStock.map((r) => [r.itemCode, r.itemName, humanize(r.category), r.lotNo ?? "", r.quantityIn.toFixed(3), r.quantityOut.toFixed(3), r.balanceKg.toFixed(3), r.unit, r.lastMovedAt ? dayOf(r.lastMovedAt) : "", daysSince(r.lastMovedAt) ?? ""]),
       );
     } else if (view === "sold") {
       downloadCsv(
         `sold-${selectedWarehouse?.code ?? "warehouse"}-${todayInput()}.csv`,
         ["Dispatched", "Bill no", "Sold to", "Party type", "Item code", "Item name", "Material", "Lot", "Quantity", "Unit", "Vehicle", ...(canManageWarehouses ? ["Amount"] : [])],
-        visibleSold.map((l) => [l.dispatchedAt.slice(0, 10), l.saleNo, l.partyName, PARTY_LABEL[l.partyType], l.itemCode, l.itemName, humanize(l.category), l.lotNo, l.quantity.toFixed(3), l.unit, l.vehicleNo, ...(canManageWarehouses ? [l.amount?.toFixed(2)] : [])]),
+        visibleSold.map((l) => [dayOf(l.dispatchedAt), l.saleNo, l.partyName, PARTY_LABEL[l.partyType], l.itemCode, l.itemName, humanize(l.category), l.lotNo, l.quantity.toFixed(3), l.unit, l.vehicleNo, ...(canManageWarehouses ? [l.amount?.toFixed(2)] : [])]),
       );
     } else {
       downloadCsv(
@@ -824,20 +873,48 @@ function Warehouses() {
         header: "Item code",
         id: "item",
         accessorFn: (r) => `${r.itemCode} ${r.itemName}`,
-        cell: ({ row }) => <ItemCodeLink code={row.original.itemCode} warehouseId={row.original.warehouseId} />,
+        cell: ({ row }) => (
+          <div className="min-w-0 max-w-[18rem]">
+            <ItemCodeLink code={row.original.itemCode} warehouseId={row.original.warehouseId} />
+            <span className="wh-stock__name" title={row.original.itemName}>{row.original.itemName}</span>
+          </div>
+        ),
       },
-      { header: "Lot", accessorFn: (r) => r.lotNo || "—" },
-      { header: "In", accessorKey: "quantityIn", meta: { align: "right" }, cell: ({ row }) => quantity(row.original.quantityIn, row.original.unit) },
-      { header: "Out", accessorKey: "quantityOut", meta: { align: "right" }, cell: ({ row }) => quantity(row.original.quantityOut, row.original.unit) },
+      { header: "Lot", accessorFn: (r) => r.lotNo || "—", cell: ({ row }) => (row.original.lotNo ? <span className="wh-stock__lot">{row.original.lotNo}</span> : <span className="text-gray-300">—</span>) },
+      { header: "In", accessorKey: "quantityIn", meta: { align: "right" }, cell: ({ row }) => <span className="wh-stock__flow is-in">+{quantity(row.original.quantityIn, row.original.unit)}</span> },
+      { header: "Out", accessorKey: "quantityOut", meta: { align: "right" }, cell: ({ row }) => <span className="wh-stock__flow is-out">−{quantity(row.original.quantityOut, row.original.unit)}</span> },
       {
         header: "Balance",
         accessorKey: "balanceKg",
         meta: { align: "right" },
-        cell: ({ row }) => (
-          <b className={row.original.balanceKg < -EMPTY ? "text-red-600" : "text-emerald-700"} title={row.original.balanceKg < -EMPTY ? "More issued than received: check the entries" : undefined}>
-            {quantity(row.original.balanceKg, row.original.unit)}
-          </b>
-        ),
+        cell: ({ row }) => {
+          const r = row.original;
+          const negative = r.balanceKg < -EMPTY;
+          return (
+            <div className="wh-stock__balance" title={negative ? "More issued than received: check the entries" : undefined}>
+              <b className={negative ? "text-red-600" : Math.abs(r.balanceKg) <= EMPTY ? "text-gray-400" : "text-emerald-700"}>{quantity(r.balanceKg, r.unit)}</b>
+              <span className="wh-stock__bar" aria-hidden><span style={{ width: `${maxBalance > 0 && r.balanceKg > 0 ? (r.balanceKg / maxBalance) * 100 : 0}%` }} /></span>
+            </div>
+          );
+        },
+      },
+      {
+        header: "Last moved",
+        id: "moved",
+        accessorFn: (r) => r.lastMovedAt ?? "",
+        cell: ({ row }) => {
+          const days = daysSince(row.original.lastMovedAt);
+          if (days === null) return <span className="text-gray-300">—</span>;
+          const idle = row.original.balanceKg > EMPTY && days > IDLE_DAYS;
+          return (
+            <span className="whitespace-nowrap">
+              <span className="block text-xs text-gray-600">{formatDate(row.original.lastMovedAt)}</span>
+              <span className={cn("wh-stock__age", idle && "is-idle")} title={idle ? `No movement for over ${IDLE_DAYS} days` : undefined}>
+                <Clock3 size={10} aria-hidden /> {days === 0 ? "today" : `${days}d ago`}
+              </span>
+            </span>
+          );
+        },
       },
       {
         header: "",
@@ -871,7 +948,7 @@ function Warehouses() {
         },
       },
     ],
-    [canEdit],
+    [canEdit, maxBalance],
   );
 
   const historyColumns = useMemo<ColumnDef<Txn>[]>(
@@ -1214,6 +1291,25 @@ function Warehouses() {
           <div><p>Waiting here</p><strong>{outgoingSales.length + incomingPos.length + incomingFabricRows.length}</strong></div>
           <div className={cn(negatives.length > 0 && "is-alert")}><p>Below zero</p><strong>{balances.data ? negatives.length : "…"}</strong></div>
         </div>
+        {balances.data && totalKg > EMPTY && (
+          <div className="wh-hero__mix">
+            <div className="wh-hero__mixbar" role="img" aria-label="Stock by material, in KG">
+              {materials.filter((m) => m.kg > EMPTY).map((m) => (
+                <span key={m.category} style={{ width: `${(m.kg / totalKg) * 100}%`, background: MATERIAL[m.category]?.color ?? "#94a3b8" }} title={`${humanize(m.category)}: ${kg(m.kg)}`} />
+              ))}
+            </div>
+            <ul className="wh-hero__legend">
+              {materials.filter((m) => m.kg > EMPTY).map((m) => (
+                <li key={m.category}>
+                  <button type="button" onClick={() => chooseCategory(m.category)}>
+                    <i style={{ background: MATERIAL[m.category]?.color ?? "#94a3b8" }} />
+                    {humanize(m.category)} <b>{kg(m.kg)}</b> <span>{Math.round((m.kg / totalKg) * 100)}%</span>
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        )}
       </header>
 
       <div className="wh-toolbar">
@@ -1299,23 +1395,34 @@ function Warehouses() {
       />
 
       <div className="grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
-        {materials.map((m) => (
-          <button
-            key={m.category}
-            type="button"
-            onClick={() => chooseCategory(m.category)}
-            aria-pressed={m.category === category && !onlyNegative}
-            data-material={m.category}
-            className={cn("wh-tile", m.category === category && !onlyNegative && "is-active")}
-          >
-            <span className="wh-tile__icon"><Layers size={16} /></span>
-            <span className="min-w-0">
-              <span className="block text-[10px] font-bold uppercase tracking-wide text-gray-500">{humanize(m.category)}</span>
-              <span className={cn("block text-lg font-bold", m.negative && "text-red-600")}>{balances.data ? m.total : "…"}</span>
-              <span className="block text-[11px] text-gray-400">{m.items ? `${m.items} item${m.items === 1 ? "" : "s"} in stock` : "Nothing in stock"}</span>
-            </span>
-          </button>
-        ))}
+        {materials.map((m) => {
+          const MaterialIcon = MATERIAL[m.category]?.icon ?? Layers;
+          const share = totalKg > EMPTY ? (m.kg / totalKg) * 100 : 0;
+          return (
+            <button
+              key={m.category}
+              type="button"
+              onClick={() => chooseCategory(m.category)}
+              aria-pressed={m.category === category && !onlyNegative && !onlyIdle}
+              data-material={m.category}
+              className={cn("wh-tile", m.category === category && !onlyNegative && !onlyIdle && "is-active")}
+            >
+              <span className="wh-tile__icon"><MaterialIcon size={16} /></span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center justify-between gap-2 text-[10px] font-bold uppercase tracking-wide text-gray-500">
+                  {humanize(m.category)}
+                  {m.kg > EMPTY && <span className="wh-tile__share">{Math.round(share)}%</span>}
+                </span>
+                <span className={cn("block text-lg font-bold", m.negative && "text-red-600")}>{balances.data ? m.total : "…"}</span>
+                <span className="wh-tile__track" aria-hidden><span style={{ width: `${share}%` }} /></span>
+                <span className="block text-[11px] text-gray-400">
+                  {m.items ? `${m.items} item${m.items === 1 ? "" : "s"} in stock` : "Nothing in stock"}
+                  {m.idle > 0 && <span className="font-semibold text-amber-700"> · {m.idle} not moving</span>}
+                </span>
+              </span>
+            </button>
+          );
+        })}
         <button
           type="button"
           disabled={negatives.length === 0}
@@ -1352,10 +1459,17 @@ function Warehouses() {
               Below zero only <X size={13} />
             </Button>
           ) : (
-            <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
-              <input type="checkbox" checked={hideEmpty} onChange={(e) => setHideEmpty(e.target.checked)} />
-              Hide zero balances
-            </label>
+            <>
+              <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
+                <input type="checkbox" checked={hideEmpty} disabled={onlyIdle} onChange={(e) => setHideEmpty(e.target.checked)} />
+                Hide zero balances
+              </label>
+              {(idleRows.length > 0 || onlyIdle) && (
+                <button type="button" className={cn("wh-idle-chip", onlyIdle && "is-on")} aria-pressed={onlyIdle} onClick={() => setOnlyIdle(!onlyIdle)}>
+                  <Clock3 size={12} /> {idleRows.length} not moved for {IDLE_DAYS}+ days{onlyIdle && <X size={12} />}
+                </button>
+              )}
+            </>
           ))}
         {view === "history" && (
           <label className="flex items-center gap-2 text-xs font-semibold text-gray-600">
@@ -1452,6 +1566,8 @@ function Warehouses() {
               emptyTitle={`No ${humanize(category).toLowerCase()} in ${selectedWarehouse.code}`}
               emptyDescription={canEdit ? "Use “New entry” to record stock coming in." : "Stock appears here once entries are recorded."}
             />
+            {/* Yarn given to knitting isn't stock while it is knitted: where it is, by batch and machine. */}
+            {category === "YARN" && <div className="mt-4"><YarnAtKnitting warehouseId={warehouseId || undefined} /></div>}
           </div>
         )
       ) : view === "sold" ? (

@@ -1,6 +1,9 @@
-import { CheckCircle2, CircleDashed, Warehouse as WarehouseIcon, ArrowRight, type LucideIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { useState } from "react";
+import { CheckCircle2, CircleDashed, Warehouse as WarehouseIcon, ArrowRight, UserRound, type LucideIcon } from "lucide-react";
+import { cn, kg } from "@/lib/utils";
+import { Input } from "@/components/ui/input";
 import type { BadgeTone } from "@/components/ui/badge";
+import type { ProcessDeliveryDestination } from "./types";
 
 type FieldProps = {
   label: string;
@@ -56,6 +59,50 @@ export function FieldGroup({ label, hint, error, warning, required, className, c
   );
 }
 
+/**
+ * A process's charges, typed either as a rate per KG (the total follows from the weight) or as the total itself
+ * (the rate per KG is shown from it). `value` is the total in rupees, as the form keeps it.
+ */
+export function ChargeInput({ label, value, onChange, weightKg }: { label: string; value: string; onChange: (total: string) => void; weightKg: number }) {
+  const [rate, setRate] = useState("");
+  const total = Number(value || 0);
+  const shownRate = rate !== "" ? rate : weightKg > 0 && total > 0 ? String(Math.round((total / weightKg) * 100) / 100) : "";
+  return (
+    <FieldGroup label={label} hint={weightKg > 0 ? `₹ per KG × ${kg(weightKg)}` : "₹"}>
+      <span className="charge-input">
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          inputMode="decimal"
+          aria-label={`${label}, rupees per KG`}
+          placeholder="₹ / KG"
+          disabled={!(weightKg > 0)}
+          value={shownRate}
+          onChange={(e) => {
+            setRate(e.target.value);
+            onChange(String(Math.round(Number(e.target.value || 0) * weightKg * 100) / 100));
+          }}
+        />
+        <span aria-hidden>=</span>
+        <Input
+          type="number"
+          min="0"
+          step="0.01"
+          inputMode="decimal"
+          aria-label={`${label}, total rupees`}
+          placeholder="Total ₹"
+          value={value}
+          onChange={(e) => {
+            setRate("");
+            onChange(e.target.value);
+          }}
+        />
+      </span>
+    </FieldGroup>
+  );
+}
+
 /** Where a finished process sends its fabric: on to the next process, or into a warehouse as stock. */
 export function DestinationToggle({
   value,
@@ -63,18 +110,19 @@ export function DestinationToggle({
   onChange,
   disabled,
 }: {
-  value: "NEXT_PROCESS" | "WAREHOUSE";
-  /** The next process, e.g. "dyeing". */
-  next: string;
-  onChange: (value: "NEXT_PROCESS" | "WAREHOUSE") => void;
+  value: ProcessDeliveryDestination;
+  /** The next process, e.g. "dyeing"; none after the last process. */
+  next?: string;
+  onChange: (value: ProcessDeliveryDestination) => void;
   disabled?: boolean;
 }) {
   const options = [
-    { value: "NEXT_PROCESS" as const, icon: ArrowRight, title: `On to ${next}`, text: `Straight to the ${next} mill` },
-    { value: "WAREHOUSE" as const, icon: WarehouseIcon, title: "Into a warehouse", text: `Kept as stock; start ${next} from it later` },
+    ...(next ? [{ value: "NEXT_PROCESS" as const, icon: ArrowRight, title: `On to ${next}`, text: `Straight to the ${next} mill` }] : []),
+    { value: "WAREHOUSE" as const, icon: WarehouseIcon, title: "Into a warehouse", text: next ? `Kept as stock; start ${next} from it later` : "Kept as finished fabric stock" },
+    { value: "PARTY" as const, icon: UserRound, title: "To a party", text: next ? "Delivered to a customer; the batch ends here" : "Delivered to a customer, with what they paid" },
   ];
   return (
-    <div className="production-destination" role="radiogroup" aria-label="Deliver to">
+    <div className={cn("production-destination", options.length === 3 && "is-three")} role="radiogroup" aria-label="Deliver to">
       {options.map(({ value: option, icon: Icon, title, text }) => (
         <button key={option} type="button" role="radio" aria-checked={value === option} disabled={disabled} className={cn(value === option && "is-active")} onClick={() => onChange(option)}>
           <Icon size={16} className="shrink-0" />

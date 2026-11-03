@@ -9,7 +9,7 @@ import { PARTY_LABEL, type Sale } from "@/lib/sales";
 import { cn, formatDate, kg } from "@/lib/utils";
 import { quantity } from "@/lib/warehouses";
 import { Button } from "@/components/ui/button";
-import { stageMaterial, type IncomingFabric } from "./receive-fabric-dialog";
+import { fabricOf, stageMaterial, type IncomingFabric } from "./receive-fabric-dialog";
 
 type Negative = { itemCode: string; itemName: string; lotNo: string | null; unit: string; balanceKg: number };
 
@@ -165,7 +165,7 @@ export function ActionCenter({
             <li key={d.id} className="wh-action__row">
               <div className="min-w-0 flex-1">
                 <p className="font-semibold">{d.flow.flowNo} · {stageMaterial(d.processStage).replaceAll("_", " ").toLowerCase()}</p>
-                <p className="truncate text-xs text-gray-600">{kg(d.weightKg)} {d.flow.yarnCount}{d.flow.color ? ` · ${d.flow.color}` : ""}{d.notes ? ` · ${d.notes}` : ""}</p>
+                <p className="truncate text-xs text-gray-600">{kg(d.weightKg)}{d.sentPackages ? ` · ${d.sentPackages} ${d.packageUnit ?? "rolls"}` : ""} · {fabricOf(d.flow) || d.flow.yarnCount}{d.challanNo ? ` · ${d.challanNo}` : ""}{d.notes ? ` · ${d.notes}` : ""}</p>
               </div>
               <span className="shrink-0 text-xs text-gray-500">Sent {formatDate(d.deliveredAt)}</span>
               {act("Receive", onReceiveFabric && (() => onReceiveFabric(d)))}

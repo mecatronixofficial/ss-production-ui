@@ -2,7 +2,8 @@ import { kg } from "@/lib/utils";
 export type FlowStatus = "PURCHASED" | "KNITTING" | "DYEING" | "COMPACTING" | "AT_OFFICE" | "DELIVERED";
 export type FlowSource = "PURCHASE" | "STOCK";
 export type KnittingMillType = "OWN" | "OTHER";
-export type ProcessDeliveryDestination = "NEXT_PROCESS" | "WAREHOUSE";
+/** Where a process sends its fabric when it finishes: the next process, a warehouse, or a party (the batch ends). */
+export type ProcessDeliveryDestination = "NEXT_PROCESS" | "WAREHOUSE" | "PARTY";
 /** The processes recorded on a batch; deliveries of the compacted fabric are part of compacting. */
 export type StageKey = "knitting" | "dyeing" | "compacting";
 export type AttachmentStage = "KNITTING" | "DYEING" | "COMPACTING" | "FINAL";
@@ -32,6 +33,8 @@ export type FlowMetrics = {
   yarnAmount: number;
   yarnLossKg: number;
   knittingLossKg: number;
+  /** Yarn given to knitting that it didn't use: back in the warehouse, not lost. */
+  yarnReturnedKg?: number;
   dyeingLossKg: number;
   compactingLossKg: number;
   balanceFabricKg: number;
@@ -40,6 +43,45 @@ export type FlowMetrics = {
   totalSpent: number;
   additionalExpenses: number;
   profit: number;
+  /** What a KG of this batch's grey fabric cost (yarn, knitting, expenses): what its dyeing lots take on. */
+  costPerKg: number;
+  /** A knitting batch dyed in lots: the grey fabric (and cost) gone into them and what is left on the batch. */
+  lots: { count: number; allocatedKg: number; remainingKg: number; allocatedCost: number } | null;
+};
+
+/** A colour a knitting batch's grey fabric went into: a batch of its own (…-DY01), compacted and delivered under its code. */
+export type FlowLot = {
+  id: string;
+  flowNo: string;
+  status: FlowStatus;
+  color: string | null;
+  /** The grey fabric it took. */
+  purchasedWeightKg: number | string;
+  dyeingDate: string | null;
+  dyeingMillDetails: string | null;
+  dyeingOutputWeightKg: number | string | null;
+  compactingDate: string | null;
+  officeDeliveryKg: number | string | null;
+  finalDeliveredKg: number | string | null;
+};
+
+/** A delivery challan for the batch's fabric leaving one place for the next (a process, a warehouse or a party). */
+export type FlowChallan = {
+  id: string;
+  /** PDC-2026-000001 */
+  challanNo: string;
+  /** KNITTING, DYEING_IN, DYEING, COMPACTING_IN or DELIVERY:<delivery id>. */
+  handOff: string;
+  date: string;
+  material: string;
+  fromName: string;
+  toKind: "PROCESS" | "WAREHOUSE" | "PARTY";
+  toName: string;
+  weightKg: string | number;
+  packages: number | null;
+  packageUnit: string | null;
+  vehicleNo: string | null;
+  cancelledAt: string | null;
 };
 
 export type FlowExpense = { id: string; expenseDate: string; category: string; description: string | null; amount: string; createdAt: string };
@@ -52,8 +94,16 @@ export type FabricFlow = {
   id: string;
   /** Changes whenever the batch itself is saved (not when files or expenses are added). */
   updatedAt: string;
-  /** Batch code, e.g. SS-2026-003 (the yarn's code) or SS-2026-003-2. */
+  /**
+   * Batch code: a knitting batch is the yarn's code and -KT01 (01SS26-KT01), a dyeing lot -DY01 on that
+   * (01SS26-KT01-DY01). Older batches keep theirs (SS-2026-003-D1).
+   */
   flowNo: string;
+  /** A dyeing lot's knitting batch. */
+  parentId: string | null;
+  parent: { id: string; flowNo: string } | null;
+  /** A knitting batch's dyeing lots, one per colour. */
+  lots: FlowLot[];
   status: FlowStatus;
   source: FlowSource;
   yarnItemCode: string | null;
@@ -86,8 +136,20 @@ export type FabricFlow = {
   knittingGg: string | null;
   knittingLl: string | null;
   yarnReceivedKg: number | null;
+  /**
+   * Fabric types started together share one yarn: the yarn shared, the other batches, what the finished ones used,
+   * how many are still knitting, and what is left for this one. Null for a batch with its own yarn.
+   */
+  yarnPool?: { totalKg: number; sharedWith: string[]; usedByOthersKg: number; othersOpen: number; leftForThisKg: number } | null;
+  /** Grey fabric dyeing didn't use, back in a warehouse (a lot's under its knitting batch's code). */
+  dyeingBalanceKg?: number | null;
+  /** Dyed fabric compacting didn't use, back in a warehouse. */
+  compactingBalanceKg?: number | null;
+  /** The fabric this knitting was started to make (the yarn sent was worked out from it). */
+  plannedFabricKg: number | null;
   /** Knitted total weight. */
   knittingDeliveryKg: number | null;
+  /** The grey fabric's rolls from knitting (kept in step with the Machines page's day entries for own-mill work). */
   knittingBagCount: number | null;
   knittingDeliveryPlace: string | null;
   knittingDestination: ProcessDeliveryDestination;
@@ -136,11 +198,34 @@ export type FabricFlow = {
   /** Totals are in `finalDeliveredKg`, `collectedAmount`, `otherExpense`; older batches have totals only. */
   deliveries: FlowDelivery[];
   processDeliveries: FlowDelivery[];
+  /** Delivery challans of every hand-off, oldest first (cancelled ones included). */
+  challans?: FlowChallan[];
+  /** Own-mill knitting: the task's work on each machine (outputKg is the fabric knitted there so far). */
+  knittingRuns?: Array<{ id: string; runNo: string; status: "RUNNING" | "FINISHED"; yarnKg: number | string; outputKg: number | string | null; rollCount?: number | null; machine: { id: string; code: string; name: string } }>;
+  yarnIssueTxnId?: string | null;
   expenses: FlowExpense[];
   metrics: FlowMetrics;
 };
 
 export type FlowDirectory = { dealers: string[]; mills: string[]; knittingMills: string[]; dyeingMills: string[]; compactingMills: string[]; yarnStocks: string[]; fabricStocks: string[]; deliveryParties?: string[] };
+
+/**
+ * A knitting batch dyes in lots: each colour its grey fabric goes into becomes a lot with its own code. Older batches
+ * that were dyed on themselves (and dyeing lots) don't.
+ */
+export const dyesInLots = (flow: FabricFlow) => !flow.parentId && flow.dyeingDate === null && !flow.dyeingIssueTxnId && flow.dyeingOutputWeightKg === null;
+/** A knitting batch's grey fabric not yet in a dyeing lot (null before it has a lot). */
+export const greyLeft = (flow: FabricFlow) => flow.metrics.lots?.remainingKg ?? null;
+/** The grey fabric a knitting batch can still dye: knitted and not yet in a lot. */
+export const greyToDye = (flow: FabricFlow) => greyLeft(flow) ?? flow.dyeingDeliveryKg;
+/** Where a dyeing lot is now, in a word or two. */
+export const lotStage = (lot: FlowLot) => {
+  const done = lot.officeDeliveryKg === null ? null : Number(lot.officeDeliveryKg);
+  if (done !== null) return Number(lot.finalDeliveredKg ?? 0) >= done - 0.0005 ? "Delivered" : "To deliver";
+  if (lot.compactingDate) return "Compacting";
+  if (lot.dyeingOutputWeightKg !== null) return "Dyed";
+  return "Dyeing";
+};
 
 /** Knitting has started but not finished: the yarn is at the knitting party. */
 export const isKnitting = (flow: FabricFlow) => flow.status === "KNITTING" && flow.knittingFinishedAt === null;
@@ -210,3 +295,17 @@ export const localDate = (value?: string | null) => {
 export const numeric = (value: string) => Number(value || 0);
 export const shortDate = (value: string | null) =>
   value ? new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" }).format(new Date(value)) : null;
+
+/** The challans that belong to a process card: what left knitting, what went to / left dyeing and compacting, each delivery. */
+export const challansFor = (flow: FabricFlow, stage: StageKey | "delivery") => {
+  const keys: Record<StageKey | "delivery", (handOff: string) => boolean> = {
+    knitting: (h) => h === "KNITTING",
+    dyeing: (h) => h === "DYEING_IN" || h === "DYEING",
+    compacting: (h) => h === "COMPACTING_IN",
+    delivery: (h) => h.startsWith("DELIVERY:"),
+  };
+  return (flow.challans ?? []).filter((c) => keys[stage](c.handOff));
+};
+
+/** Saves a stage through the batch page (toast, reload, a challan it issued); resolves true when it saved. */
+export type RunStage = (action: () => Promise<FabricFlow>, next?: StageKey, manualRecord?: boolean) => Promise<boolean>;

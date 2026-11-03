@@ -343,7 +343,7 @@ export default function MoneyPage() {
         <span className="finance-page-icon"><Wallet size={18} /></span>
         <div className="min-w-0 flex-1">
           <h2 className="text-lg font-bold md:text-xl">Money</h2>
-          <p className="text-xs text-gray-500">Cash, bank and UPI balances; money received on sales and paid to distributors; cheques until they clear; and what each textile and distributor owes.</p>
+          <p className="text-xs text-gray-500">Cash, bank and UPI balances; money received on sales and paid to distributors; expenses, including machine costs and money given to staff; cheques until they clear; and what each textile and distributor owes.</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <Button variant="outline" onClick={() => setEntry({ kind: "TRANSFER" })}><ArrowLeftRight size={15} /> Transfer</Button>
@@ -407,7 +407,17 @@ export default function MoneyPage() {
                   );
                 })}
                 {s.month.collected > 0 && <div><dt>Collected on deliveries</dt><dd className="text-emerald-700">+{money(s.month.collected)}</dd></div>}
-                <div><dt>Expenses</dt><dd className="text-rose-700">−{money(s.month.expenses)}</dd></div>
+                <div>
+                  <dt>
+                    Expenses
+                    {(s.month.machineExpenses > 0 || s.month.staffPayments > 0) && (
+                      <span className="block text-[11px] font-normal text-gray-400">
+                        machines {money(s.month.machineExpenses)} · staff {money(s.month.staffPayments)} · other {money(s.month.expenses - s.month.machineExpenses - s.month.staffPayments)}
+                      </span>
+                    )}
+                  </dt>
+                  <dd className="text-rose-700">−{money(s.month.expenses)}</dd>
+                </div>
                 <div className="is-total"><dt>Net this month</dt><dd className={s.month.net >= 0 ? "text-emerald-700" : "text-red-700"}>{signed(s.month.net)}</dd></div>
               </dl>
               <p className="text-[11px] text-gray-500">In {money(s.month.moneyIn)} · out {money(s.month.moneyOut)}. A cheque counts on the day it clears. The same figures are on Finance.</p>

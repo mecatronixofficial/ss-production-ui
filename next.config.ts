@@ -20,6 +20,10 @@ const nextConfig: NextConfig = {
   experimental: {
     optimizePackageImports: ["lucide-react", "recharts", "@tanstack/react-table"],
   },
+  // Answered by the router itself, before any page code runs.
+  async redirects() {
+    return [{ source: "/", destination: "/dashboard", permanent: false }];
+  },
   async headers() {
     return [{ source: "/:path*", headers: securityHeaders }];
   },

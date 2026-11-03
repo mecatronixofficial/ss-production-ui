@@ -105,6 +105,9 @@ export type MoneyContext = {
   textiles: Array<{ id: string; code: string; name: string; active: boolean }>;
   others: string[];
   openSales: OpenSale[];
+  /** What an expense can be for. */
+  machines?: Array<{ id: string; code: string; name: string }>;
+  employees?: Array<{ id: string; code: string; name: string; department: string }>;
 };
 
 export type DistributorParty = {
@@ -197,6 +200,9 @@ export type CashFlow = {
   otherPaid: number;
   expenses: number;
   expenseCount: number;
+  /** Of the expenses: spent on machines, and given to employees. */
+  machineExpenses: number;
+  staffPayments: number;
   moneyIn: number;
   moneyOut: number;
   net: number;
@@ -212,6 +218,10 @@ export type Expense = {
   amount: number;
   paymentMode: string;
   account: { id: string; name: string; type: AccountType } | null;
+  /** The machine it was spent on. */
+  machine?: { id: string; code: string; name: string } | null;
+  /** The employee it was paid to. */
+  employee?: { id: string; code: string; name: string } | null;
   createdBy: string | null;
   createdAt: string;
   cancelledAt: string | null;
@@ -255,12 +265,70 @@ export type FinanceOverview = {
   spent: { purchases: number; purchaseReceipts: number; expenses: number; expenseCount: number; batchCosts: number; batchCostCount: number; total: number };
   result: number;
   cashFlow: CashFlow;
-  months: Array<{ month: string; moneyIn: number; moneyOut: number; net: number; received: number; collected: number; paid: number; expenses: number }>;
+  /** Expenses spent on machines (part of `spent.expenses`). */
+  machineExpenses: {
+    total: number;
+    count: number;
+    byMachine: Array<{ id: string; code: string; name: string; amount: number; count: number }>;
+    byType: Array<{ type: string; amount: number; count: number }>;
+  };
+  /** Money given to employees (part of `spent.expenses`). */
+  staffPayments: {
+    total: number;
+    count: number;
+    byEmployee: Array<{ id: string; code: string; name: string; department: string; amount: number; count: number; last: string | null }>;
+    byKind: Array<{ kind: string; amount: number; count: number }>;
+  };
   expensesByCategory: Array<{ category: string; amount: number; count: number }>;
   position: PartyTotals & { inAccounts: number; accounts: number };
 };
 
-export const EXPENSE_CATEGORIES = ["Power", "Wages", "Transport", "Maintenance", "Machine spares", "Chemicals", "Packing", "Diesel / Generator", "Rent", "Office", "Other"];
+/** `/finance/pnl`: profit and loss by day, week (Monday to Sunday), month or financial year (April to March). */
+export type PnlGroup = "day" | "week" | "month" | "year";
+export type PnlFigures = {
+  sales: number;
+  collected: number;
+  earned: number;
+  purchases: number;
+  expenses: number;
+  machineExpenses: number;
+  staffPayments: number;
+  batchCosts: number;
+  spent: number;
+  profit: number;
+  moneyIn: number;
+  moneyOut: number;
+  net: number;
+};
+/** `key` is the day (YYYY-MM-DD), the Monday of the week, the month (YYYY-MM) or the year a financial year starts; `from`/`to` are its days inside the period. */
+export type PnlBucket = PnlFigures & { key: string; from: string; to: string };
+export type FinancePnl = { group: PnlGroup; buckets: PnlBucket[]; totals: PnlFigures; activeBuckets: number; profitableBuckets: number; best: string | null; worst: string | null };
+
+export const EXPENSE_CATEGORIES = ["Power", "Wages", "Transport", "Maintenance", "Machine repair", "Machine spares", "Machine other", "Chemicals", "Packing", "Diesel / Generator", "Rent", "Office", "Other"];
+
+/** What is spent on a machine, and the expense category each is counted under on Money and Finance. */
+export const MACHINE_EXPENSE_TYPES = [
+  { type: "Repair", category: "Machine repair", hint: "Breakdown repair, mechanic" },
+  { type: "Spare parts", category: "Machine spares", hint: "Belts, bearings, motors" },
+  { type: "Needles / sinkers", category: "Machine spares", hint: "Needles, sinkers, cams" },
+  { type: "Oil / lubricant", category: "Maintenance", hint: "Oil, grease" },
+  { type: "Service", category: "Maintenance", hint: "Planned service, cleaning" },
+  { type: "Electricity", category: "Power", hint: "Power for this machine" },
+  { type: "Other", category: "Machine other", hint: "Anything else" },
+] as const;
+export type MachineExpenseType = (typeof MACHINE_EXPENSE_TYPES)[number]["type"];
+
+/** Money given to an employee is a Wages expense, by kind. */
+export const WAGES_CATEGORY = "Wages";
+export const STAFF_PAY_KINDS = [
+  { kind: "Daily wage", hint: "For a day's work" },
+  { kind: "Salary", hint: "The month's pay" },
+  { kind: "Advance", hint: "Given ahead" },
+  { kind: "Overtime", hint: "Extra hours" },
+  { kind: "Bonus", hint: "Festival, incentive" },
+  { kind: "Other", hint: "Allowance, travel…" },
+] as const;
+export type StaffPayKind = (typeof STAFF_PAY_KINDS)[number]["kind"];
 
 /** A mode label for an expense; older expenses keep NEFT / RTGS / CARD as typed. */
 export const expenseModeLabel = (mode: string) => (mode in MODE_LABEL ? MODE_LABEL[mode as PaymentMode] : mode);

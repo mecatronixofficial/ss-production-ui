@@ -77,7 +77,8 @@ export default function WarehouseDetailsPage() {
   const sales = useApiQuery<Sale[]>(canEdit ? `/sales/outgoing${qs({ warehouseId: id })}` : null);
   const pos = useApiQuery<PurchaseOrder[]>(`/procurement/incoming${qs({ warehouseId: id })}`);
   const fabric = useApiQuery<IncomingFabric[]>(`/production/incoming-fabric${qs({ warehouseId: id })}`);
-  const bills = useApiQuery<{ unbilled: number }>(isAdmin ? `/inventory/bills${qs({ warehouseId: id })}` : null);
+  // Only the count of movements without a challan (the full list of challans is on its own tab).
+  const bills = useApiQuery<{ unbilled: number }>(isAdmin ? `/inventory/bills/unbilled-count${qs({ warehouseId: id })}` : null);
   const [category, setCategory] = useState<"ALL" | StockCategory>("ALL");
   const [search, setSearch] = useState("");
   const [inStockOnly, setInStockOnly] = useState(true);

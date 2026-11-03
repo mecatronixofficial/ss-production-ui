@@ -1,7 +1,7 @@
 "use client";
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
-import { AlertTriangle, ArrowRight, Bell, CheckCheck, CheckCircle2, Inbox, Trash2 } from "lucide-react";
+import { AlertTriangle, ArrowRight, Bell, CheckCheck, Inbox, Search, Trash2 } from "lucide-react";
 import { api } from "@/lib/api";
 import { confirmDialog } from "@/lib/confirm-store";
 import { ADMIN_ROLES } from "@/lib/navigation";
@@ -9,10 +9,12 @@ import { notificationLink } from "@/lib/notification-links";
 import { toast } from "@/lib/toast-store";
 import { setUnreadCount } from "@/lib/unread-store";
 import { useApiQuery } from "@/lib/use-api-query";
+import { ATTENTION_KINDS, notificationIcon, notificationKind } from "@/lib/attention";
 import { cn, formatDateTime, humanize } from "@/lib/utils";
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import { Loading } from "@/components/loading";
 import { ErrorState } from "@/components/page-state";
 
@@ -34,11 +36,21 @@ const typeLabel = (type: string) => (type === "JOB_COMPLETED" ? "Process complet
 const priorityTone = (priority: NotificationRow["priority"]) =>
   priority === "CRITICAL" ? "danger" : priority === "HIGH" ? "warning" : "default";
 
+type Kind = "all" | "production" | "stock" | "commercial";
+const kindOf = (row: NotificationRow): Exclude<Kind, "all"> =>
+  ["ProductionBatch", "KnittingRun"].includes(row.referenceType ?? "") || row.type === "JOB_COMPLETED"
+    ? "production"
+    : row.referenceType === "FabricProductionFlow" ? "stock" : "commercial";
+
+
 export default function Notifications() {
   const { user } = useAuth();
   const isAdmin = !!user && ADMIN_ROLES.includes(user.role);
   const { data: rows, error, reload, setData } = useApiQuery<NotificationRow[]>("/notifications");
   const [view, setView] = useState<"all" | "unread">("all");
+  const [kind, setKind] = useState<Kind>("all");
+  const [priority, setPriority] = useState<"all" | "important">("all");
+  const [search, setSearch] = useState("");
   const [clearing, setClearing] = useState(false);
 
   const unreadCount = useMemo(() => (rows ?? []).filter((r) => !r.isRead).length, [rows]);
@@ -46,7 +58,15 @@ export default function Notifications() {
     () => (rows ?? []).filter((r) => !r.isRead && (r.priority === "CRITICAL" || r.priority === "HIGH")).length,
     [rows],
   );
-  const visible = useMemo(() => (rows ?? []).filter((r) => view === "all" || !r.isRead), [rows, view]);
+  const visible = useMemo(() => {
+    const query = search.trim().toLowerCase();
+    return (rows ?? []).filter((row) => {
+      if (view === "unread" && row.isRead) return false;
+      if (kind !== "all" && kindOf(row) !== kind) return false;
+      if (priority === "important" && row.priority !== "HIGH" && row.priority !== "CRITICAL") return false;
+      return !query || [row.title, row.message, row.type, row.referenceId].some((value) => value?.toLowerCase().includes(query));
+    });
+  }, [rows, view, kind, priority, search]);
 
   // Keep the topbar badge in sync with what this page shows.
   useEffect(() => {
@@ -106,14 +126,15 @@ export default function Notifications() {
 
   return (
     <div className="notifications-page">
-      <div className="notifications-list-header flex flex-wrap items-center justify-between gap-4">
+      <div className="notifications-premium-head notifications-list-header flex flex-wrap items-center justify-between gap-4">
         <div className="flex items-center gap-2.5">
           <span className="notifications-page-icon">
             <Bell size={18} />
           </span>
           <div>
-            <h2 className="text-lg font-bold md:text-xl">Notifications</h2>
-            <p className="text-xs text-gray-500">Production, QC, stock, machine and delivery alerts.</p>
+            <p className="text-[9px] font-bold uppercase tracking-[.18em] text-amber-200/70">ERP activity centre</p>
+            <h2 className="text-lg font-bold text-white md:text-xl">Notifications</h2>
+            <p className="text-xs text-white/55">Production, stock, machines, purchases, sales and delivery actions.</p>
           </div>
         </div>
         <div className="flex flex-wrap items-center gap-2">
@@ -186,9 +207,33 @@ export default function Notifications() {
         </div>
       </div>
 
+      <div className="notifications-toolbar">
+        <label className="notifications-search">
+          <Search size={15} aria-hidden />
+          <Input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="Search title, batch, run, purchase or message" aria-label="Search notifications" />
+        </label>
+        <div className="notifications-filter" role="group" aria-label="Notification area">
+          {(["all", "production", "stock", "commercial"] as const).map((value) => (
+            <button key={value} type="button" aria-pressed={kind === value} onClick={() => setKind(value)}>{value === "all" ? "All areas" : humanize(value)}</button>
+          ))}
+        </div>
+        <button type="button" className={cn("notifications-important", priority === "important" && "is-active")} aria-pressed={priority === "important"} onClick={() => setPriority(priority === "important" ? "all" : "important")}>
+          <AlertTriangle size={14} /> Important only
+        </button>
+      </div>
+
+      <div className="flex items-center justify-between gap-3 px-1 text-[11px] text-gray-500">
+        <span><b className="text-gray-700">{visible.length}</b> notification{visible.length === 1 ? "" : "s"} shown</span>
+        {(search || kind !== "all" || priority !== "all") && <button type="button" className="font-semibold text-[#266956] hover:underline" onClick={() => { setSearch(""); setKind("all"); setPriority("all"); }}>Clear filters</button>}
+      </div>
+
       <div className="notifications-list">
         {visible.map((n) => {
           const link = notificationLink(n, isAdmin);
+          // What it is about (machines, warehouse, sales…): its icon and a label, the same as on the Dashboard.
+          const about = notificationKind(n);
+          const RowIcon = notificationIcon(n);
+          const urgent = n.priority === "HIGH" || n.priority === "CRITICAL";
           return (
           <div
             key={n.id}
@@ -200,11 +245,12 @@ export default function Notifications() {
               aria-label={n.isRead ? n.title : `${n.title} (unread — mark as read)`}
               className="notifications-row-main"
             >
-              <span className={cn("notifications-row-icon", n.type === "JOB_COMPLETED" && "is-done")}>
-                {n.type === "JOB_COMPLETED" ? <CheckCircle2 size={15} /> : <Bell size={15} />}
+              <span className={cn("attn-icon", `is-${about}`, urgent && !n.isRead && "is-urgent")}>
+                <RowIcon size={15} />
               </span>
               <div className="notifications-row-body">
                 <div className="notifications-row-heading">
+                  <span className={cn("attn-kind-chip", `is-${about}`)}>{ATTENTION_KINDS[about].label}</span>
                   <p className="notifications-row-title">{n.title}</p>
                   <Badge tone={n.type === "JOB_COMPLETED" ? "success" : "info"}>{typeLabel(n.type)}</Badge>
                   <Badge tone={priorityTone(n.priority)}>{n.priority}</Badge>

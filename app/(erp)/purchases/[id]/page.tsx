@@ -194,6 +194,9 @@ export default function PurchaseOrderPage() {
                       <td className="px-3 py-2">
                         <p className="font-semibold">{item.itemName}</p>
                         <p className="text-xs text-gray-400">{codeLabel(item)}{item.category ? ` · ${humanize(item.category)}` : ""}</p>
+                        {item.specs && item.specs.length > 0 && (
+                          <span className="purchases-item-specs">{item.specs.map((s) => <span key={s.label}>{s.label} {s.value}</span>)}</span>
+                        )}
                         <div className={cn("purchases-progress max-w-48", pct >= 100 && "is-complete")} aria-hidden><span style={{ width: `${pct}%` }} /></div>
                       </td>
                       <td className="px-3 py-2 text-right">{qty(ordered, item.unit)}</td>

@@ -7,7 +7,7 @@ export type PurchaseSupplier = { id: string; code: string; name: string; materia
 export type PurchaseWarehouse = { id: string; code: string; name: string };
 export type PurchaseItem = {
   id: string;
-  /** Given on the line's first receipt (SS-2026-001…); null until then. */
+  /** Given on the line's first receipt (01SS26…); null until then. */
   itemCode: string | null;
   itemName: string;
   /** The stock the line becomes when received; null on lines ordered before it was asked. */
@@ -16,8 +16,69 @@ export type PurchaseItem = {
   unit: string;
   /** Null for warehouse staff and managers: they see what to receive, not prices. */
   rate: string | null;
+  /** Its details as ordered (yarn count, quality, blend, mill, bags…; fabric type, dia, GSM, colour…). */
+  specs?: ItemSpec[] | null;
   receiptItems: Array<{ quantity: string }>;
 };
+
+/** One detail of a purchased item, e.g. { label: "Count", value: "36'S" }. */
+export type ItemSpec = { label: string; value: string };
+export type SpecGroup = "yarn" | "fabric" | "other";
+export type SpecField = { label: string; placeholder: string };
+
+/** Which details a material is ordered with. */
+export const specGroup = (category?: StockCategory | null): SpecGroup => (category === "YARN" ? "yarn" : category?.endsWith("_FABRIC") ? "fabric" : "other");
+
+export const SPEC_FIELDS: Record<SpecGroup, SpecField[]> = {
+  yarn: [
+    { label: "Count", placeholder: "36'S" },
+    { label: "Quality", placeholder: "VL, G-M, C-M, Combed" },
+    { label: "Blend", placeholder: "100% Cotton, PC 65/35" },
+    { label: "Mill / brand", placeholder: "Cheran Mill" },
+    { label: "Shade", placeholder: "Raw white" },
+    { label: "Bags", placeholder: "30+9" },
+    { label: "KG per bag", placeholder: "60" },
+  ],
+  fabric: [
+    { label: "Fabric", placeholder: "Single jersey, Rib" },
+    { label: "Dia", placeholder: "30" },
+    { label: "GSM", placeholder: "180" },
+    { label: "GG", placeholder: "24" },
+    { label: "LL", placeholder: "2.8" },
+    { label: "Colour", placeholder: "Navy" },
+    { label: "Rolls", placeholder: "25" },
+  ],
+  other: [
+    { label: "Brand", placeholder: "Make" },
+    { label: "Grade / spec", placeholder: "Type, grade, strength" },
+    { label: "Pack size", placeholder: "25 KG drum" },
+    { label: "Packs", placeholder: "4" },
+  ],
+};
+
+export const SPEC_GROUP_LABEL: Record<SpecGroup, string> = { yarn: "Yarn details", fabric: "Fabric details", other: "Material details" };
+
+/** "Count 36'S · Quality VL · Bags 30+9" */
+export const specsText = (specs?: ItemSpec[] | null) => (specs ?? []).map((s) => `${s.label} ${s.value}`).join(" · ");
+
+/** The name an item gets from its details when none is typed: "36'S VL", "Single jersey 30 DIA 180 GSM Navy". */
+export function suggestedName(group: SpecGroup, specs: Record<string, string>) {
+  const v = (label: string) => specs[label]?.trim() ?? "";
+  const parts =
+    group === "yarn" ? [v("Count"), v("Quality"), v("Blend")] :
+    group === "fabric" ? [v("Fabric"), v("Dia") && `${v("Dia")} DIA`, v("GSM") && `${v("GSM")} GSM`, v("Colour")] :
+    [v("Brand"), v("Grade / spec")];
+  return parts.filter(Boolean).join(" ");
+}
+
+/** Yarn ordered by bags: bags (30+9) × KG per bag, when both are numbers. */
+export function bagsKg(specs: Record<string, string>) {
+  const bags = specs["Bags"]?.trim() ?? "";
+  const perBag = Number(specs["KG per bag"]);
+  if (!/^\d+(\s*\+\s*\d+)*$/.test(bags) || !(perBag > 0)) return null;
+  const count = bags.split("+").reduce((sum, part) => sum + Number(part.trim()), 0);
+  return { count, kg: Math.round(count * perBag * 1000) / 1000 };
+}
 export type PurchaseReceipt = {
   id: string;
   receiptNo: string;

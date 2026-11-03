@@ -26,14 +26,15 @@ const qtyText = (value: number, unit: string) => unitQty(value, unit);
 /** `/sales/<id>`: one sale — who to, what leaves which warehouse, the vehicle, where it stands, and its bill. */
 export default function SalePage() {
   const { id } = useParams<{ id: string }>();
-  const { data: sale, error, reload } = useApiQuery<Sale>(`/sales/${id}`);
-  // Payments only for admins (who see prices): `payment` is null for warehouse staff.
-  const receipts = useApiQuery<MoneyTxn[]>(sale?.payment ? `/money/transactions?saleId=${id}&includeCancelled=true` : null);
-  const [billOpen, setBillOpen] = useState(false);
-  const [challanOpen, setChallanOpen] = useState(false);
   // The delivery challan is an office document: only admins open and print it.
   const { user } = useAuth();
   const isOffice = !!user && ADMIN_ROLES.includes(user.role);
+  const { data: sale, error, reload } = useApiQuery<Sale>(`/sales/${id}`);
+  // Payments only for admins (who see prices; `payment` is null for warehouse staff). Asked for together with the sale
+  // rather than after it arrives, so the page doesn't wait on two requests in a row.
+  const receipts = useApiQuery<MoneyTxn[]>(isOffice ? `/money/transactions?saleId=${id}&includeCancelled=true` : null);
+  const [billOpen, setBillOpen] = useState(false);
+  const [challanOpen, setChallanOpen] = useState(false);
   const [receiving, setReceiving] = useState(false);
   const [busy, setBusy] = useState(false);
 

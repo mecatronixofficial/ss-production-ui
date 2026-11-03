@@ -59,6 +59,20 @@ export type Sale = {
   verifiedBy?: string | null;
 };
 
+/** `/sales/summary`: the Sales page's figures over every sale (the register lists only the latest 500). */
+export type SalesSummary = {
+  counts: Record<SaleStatus | "all", number>;
+  /** Dispatched bills dated this month (as on Finance and the Dashboard), with GST, and KG loaded. */
+  billedMonth: { count: number; amount: number; kg: number; distributor: number; textile: number };
+  billedTotal: number;
+  /** Still to collect on dispatched bills; `cheques` of it is in cheques not cleared yet. */
+  toCollect: { amount: number; bills: number; cheques: number };
+  /** Dispatched bills unpaid for more than `days`. */
+  overdue: { days: number; count: number; amount: number };
+  /** The parties owing the most on bills, with how many bills and the oldest one's age. */
+  topDue: Array<{ name: string; type: SalePartyType; due: number; bills: number; oldestDays: number }>;
+};
+
 /** A dispatched sale as its printable delivery challan (`/sales/:id/delivery-challan`). Prices are null for non-admins. */
 export type DeliveryChallan = {
   id: string;

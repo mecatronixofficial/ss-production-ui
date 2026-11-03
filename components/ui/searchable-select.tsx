@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, Plus, Search } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -16,6 +16,7 @@ export function SearchableSelect({ value, onChange, options, placeholder, classN
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState(value);
   const rootRef = useRef<HTMLDivElement>(null);
+  const listId = useId();
 
   useEffect(() => { setQuery(value); }, [value]);
 
@@ -50,6 +51,10 @@ export function SearchableSelect({ value, onChange, options, placeholder, classN
           value={query}
           placeholder={placeholder}
           autoComplete="off"
+          role="combobox"
+          aria-expanded={open}
+          aria-controls={listId}
+          aria-autocomplete="list"
           onFocus={() => setOpen(true)}
           onChange={(event) => { setQuery(event.target.value); onChange(event.target.value); setOpen(true); }}
           onKeyDown={(event) => {
@@ -60,7 +65,7 @@ export function SearchableSelect({ value, onChange, options, placeholder, classN
         <ChevronDown size={14} className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
       </div>
       {open && (
-        <div className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-gray-200 bg-white p-1 shadow-lg">
+        <div id={listId} role="listbox" className="absolute z-20 mt-1 max-h-56 w-full overflow-auto rounded-xl border border-gray-200 bg-white p-1 shadow-lg">
           {filtered.length === 0 && !query.trim() && (
             <p className="px-3 py-2 text-xs text-gray-400">Start typing to search or add a new name</p>
           )}
@@ -68,6 +73,8 @@ export function SearchableSelect({ value, onChange, options, placeholder, classN
             <button
               key={option}
               type="button"
+              role="option"
+              aria-selected={option.toLowerCase() === value.trim().toLowerCase()}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => select(option)}
               className={cn(
@@ -82,6 +89,8 @@ export function SearchableSelect({ value, onChange, options, placeholder, classN
           {query.trim() && !exactMatch && (
             <button
               type="button"
+              role="option"
+              aria-selected={false}
               onMouseDown={(event) => event.preventDefault()}
               onClick={() => select(query.trim())}
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-left text-sm font-semibold text-emerald-700 hover:bg-emerald-50"
@@ -93,4 +102,12 @@ export function SearchableSelect({ value, onChange, options, placeholder, classN
       )}
     </div>
   );
+}
+
+/**
+ * For a dialog's `onEscapeKeyDown`: Escape in an open dropdown (this one, or any combobox) closes only the dropdown,
+ * not the dialog around it.
+ */
+export function keepDialogForOpenDropdown(event: KeyboardEvent) {
+  if (event.target instanceof Element && event.target.closest('[aria-expanded="true"]')) event.preventDefault();
 }

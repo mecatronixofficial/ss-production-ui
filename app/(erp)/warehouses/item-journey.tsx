@@ -42,7 +42,8 @@ type Delivery = {
 export type JourneyBatch = {
   flowNo: string;
   status: string;
-  role: "YARN" | "FABRIC" | "KNITTED";
+  role: "YARN" | "FABRIC" | "KNITTED" | "LOT" | "KNITTING_BATCH";
+  parentFlowNo: string | null;
   fabric: { type: string | null; diameter: string | null; gsm: string | null; gg: string | null; ll: string | null; color: string | null; count: string | null };
   yarn: { itemCode: string | null; name: string; kg: number; warehouse: string | null; lotNo: string | null; ratePerKg: number | null; amount: number | null; startedAt: string };
   knitting: {
@@ -52,7 +53,7 @@ export type JourneyBatch = {
     startedAt: string | null;
     expectedFinish: string | null;
     finishedAt: string | null;
-    bags: number | null;
+    rolls: number | null;
     outputKg: number | null;
     destination: "NEXT_PROCESS" | "WAREHOUSE";
     deliveryPlace: string | null;
@@ -208,13 +209,20 @@ function Step({ icon: Icon, tone, title, when, children }: { icon: typeof Boxes;
 
 const dates = (from: string | null | undefined, to: string | null | undefined, running = "in progress") =>
   from ? `${formatDate(from)} → ${to ? formatDate(to) : running}` : null;
-const ROLE: Record<JourneyBatch["role"], string> = { YARN: "Made from this yarn", FABRIC: "This fabric's batch", KNITTED: "Knitted on this code's run" };
+const ROLE: Record<JourneyBatch["role"], string> = {
+  YARN: "Made from this yarn",
+  FABRIC: "This fabric's batch",
+  KNITTED: "Knitted on this code's run",
+  LOT: "Dyeing lot of this batch",
+  KNITTING_BATCH: "This lot's knitting batch",
+};
 
 /** One production batch from yarn to delivery: every process, machine, date, weight and (for admins) cost. */
 export function BatchJourney({ batch: b, itemCode, showPrices }: { batch: JourneyBatch; itemCode: string; showPrices: boolean }) {
   const f = b.fabric;
   const k = b.knitting;
-  const spec = [f.type, f.diameter, gsmText(f.gsm), f.gg && `GG ${f.gg}`, f.ll && `LL ${f.ll}`, f.color, f.count].filter(Boolean) as string[];
+  // The dia is labelled (as elsewhere), so "23 dia" can't be mistaken for a count of 23.
+  const spec = [f.type, f.diameter && (/dia/i.test(f.diameter) ? f.diameter : `${f.diameter} dia`), gsmText(f.gsm), f.gg && `GG ${f.gg}`, f.ll && `LL ${f.ll}`, f.color, f.count].filter(Boolean) as string[];
   const deliveryRows = [...b.handOffs, ...b.deliveries];
   return (
     <article className="journey-batch">
@@ -222,7 +230,7 @@ export function BatchJourney({ batch: b, itemCode, showPrices }: { batch: Journe
         <div className="min-w-0">
           <p className="journey-batch__role">{ROLE[b.role]}</p>
           <Link href={`/production?batch=${encodeURIComponent(b.flowNo)}`} className="journey-batch__code">{b.flowNo} <ArrowRight size={14} className="inline" /></Link>
-          {spec.length > 0 && <p className="mt-1 flex flex-wrap gap-1">{spec.map((s) => <span key={s} className="journey-chip">{s}</span>)}</p>}
+          {spec.length > 0 && <p className="mt-1 flex flex-wrap gap-1">{spec.map((s, i) => <span key={`${i}-${s}`} className="journey-chip">{s}</span>)}</p>}
         </div>
         <Badge tone={b.status === "DELIVERED" ? "success" : b.status === "AT_OFFICE" ? "info" : "warning"}>{b.status === "AT_OFFICE" ? "Ready to deliver" : humanize(b.status)}</Badge>
       </header>
@@ -258,7 +266,7 @@ export function BatchJourney({ batch: b, itemCode, showPrices }: { batch: Journe
             <Fact label="Expected finish" value={!k.finishedAt && k.expectedFinish ? formatDate(k.expectedFinish) : null} />
             <Fact label="Grey fabric" value={k.outputKg !== null ? kg(k.outputKg) : null} />
             <Fact label="Change" value={change(b.yarn.kg, k.outputKg)} />
-            <Fact label="Bags" value={k.bags} />
+            <Fact label="Rolls" value={k.rolls} />
             <Fact label="Sent to" value={k.finishedAt ? (k.destination === "WAREHOUSE" ? `Warehouse ${k.deliveryPlace ?? ""}` : (k.deliveryPlace ?? "Dyeing")) : null} />
             {showPrices && <Fact label="Knitting charges" value={k.expense !== null && k.expense > 0 ? money(k.expense) : null} />}
           </div>

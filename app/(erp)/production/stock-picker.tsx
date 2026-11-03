@@ -127,7 +127,7 @@ export function StockPicker<T extends PickableStock>({
             <Search size={15} className="text-gray-400" aria-hidden />
             <Input
               value={search}
-              placeholder="e.g. SS-2026-003"
+              placeholder="e.g. 01SS26 or 01SS26-KT01"
               autoComplete="off"
               onChange={(e) => {
                 setSearch(e.target.value);

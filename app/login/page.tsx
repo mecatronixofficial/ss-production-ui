@@ -24,11 +24,12 @@ import {
 } from "lucide-react";
 import { useForm } from "react-hook-form";
 import { z } from "zod";
+import { rememberUser } from "@/components/auth-provider";
 import { api } from "@/lib/api";
 import { BRAND } from "@/lib/brand";
 import { homeFor } from "@/lib/navigation";
 import { toast } from "@/lib/toast-store";
-import type { Role } from "@/lib/types";
+import type { User } from "@/lib/types";
 import { errorMessage } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -78,11 +79,12 @@ function SignInForm({ onForgot }: { onForgot: (email: string) => void }) {
   const submit = async (values: LoginForm) => {
     setError("");
     try {
-      const r = await api<{ data: { role: Role; name: string } }>("/auth/login", {
+      const r = await api<{ data: User }>("/auth/login", {
         method: "POST",
         body: JSON.stringify(values),
         silent: true,
       });
+      rememberUser(r.data);
       toast.success(`Welcome back, ${r.data.name}.`, "Signed in");
       router.replace(safeNext(params.get("next")) ?? homeFor(r.data.role));
     } catch (e) {
