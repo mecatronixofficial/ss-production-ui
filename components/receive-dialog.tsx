@@ -6,7 +6,6 @@ import { ClipboardCheck, X } from "lucide-react";
 import { api } from "@/lib/api";
 import {
   categoryFor,
-  isOverdue,
   KG_CATEGORIES,
   qty,
   receivedQuantity,
@@ -232,7 +231,7 @@ export function ReceiveDialog({
                 <select className="erp-input" value={purchaseOrderId} onChange={(event) => choose(event.target.value)}>
                   <option value="">{purchaseOrders.length ? "Select purchase order" : "No open purchase orders"}</option>
                   {purchaseOrders.map((row) => (
-                    <option key={row.id} value={row.id}>{row.poNo} · {row.supplier.name}{isOverdue(row) ? " · overdue" : ""}</option>
+                    <option key={row.id} value={row.id}>{row.poNo} · {row.supplier.name}</option>
                   ))}
                 </select>
               </label>
@@ -266,7 +265,7 @@ export function ReceiveDialog({
                 </label>
               )}
               <label>
-                <span className="erp-label">Distributor challan / invoice no</span>
+                <span className="erp-label">Supplier challan / invoice no</span>
                 <Input value={challanNo} maxLength={60} onChange={(event) => setChallanNo(event.target.value)} placeholder="As written on their challan" />
               </label>
               <label>
@@ -274,7 +273,7 @@ export function ReceiveDialog({
                 <Input value={vehicleNo} maxLength={30} className="uppercase" onChange={(event) => setVehicleNo(event.target.value)} placeholder="TN 39 AB 1234" />
               </label>
               <label>
-                <span className="erp-label">Distributor lot / batch</span>
+                <span className="erp-label">Supplier lot / batch</span>
                 <Input value={lotNo} maxLength={60} onChange={(event) => setLotNo(event.target.value)} placeholder="Optional lot number" />
               </label>
               <label className="sm:col-span-2">
@@ -288,7 +287,6 @@ export function ReceiveDialog({
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <p className="text-xs text-gray-500">
                     {po.supplier.name} · ordered {formatDate(po.orderDate)}
-                    {po.expectedDate ? ` · expected ${formatDate(po.expectedDate)}` : ""}
                   </p>
                   <Button
                     size="sm"

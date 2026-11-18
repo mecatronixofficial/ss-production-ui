@@ -111,7 +111,6 @@ export default function DistributorPage() {
   const today = todayInput();
   const state = totals.balance > 0.005 ? "due" : totals.balance < -0.005 ? "advance" : "settled";
   const orders = orderFilter === "open" ? data.orders.filter((o) => OPEN.includes(o.status)) : data.orders;
-  const lateOrders = data.orders.filter((o) => OPEN.includes(o.status) && o.expectedDate && o.expectedDate.slice(0, 10) < today);
   const toArrive = data.orders.filter((o) => OPEN.includes(o.status)).reduce((sum, o) => sum + Math.max(0, o.orderedValue - o.receivedValue), 0);
   const lastPayment = data.payments.find((p) => p.counted);
   const chequesPending = data.payments.filter((p) => p.chequeStatus === "PENDING" || p.chequeStatus === "DEPOSITED").reduce((sum, p) => sum + toNumber(p.amount), 0);
@@ -164,11 +163,6 @@ export default function DistributorPage() {
       </div>
 
       {!d.active && <p className="warehouses-inactive-note">This distributor is inactive: they can&apos;t be picked for new purchase orders. Their history stays below.</p>}
-      {lateOrders.length > 0 && (
-        <p className="warehouses-inactive-note">
-          {lateOrders.length} purchase order{lateOrders.length === 1 ? " is" : "s are"} past the expected date: {lateOrders.slice(0, 3).map((o) => o.poNo).join(", ")}{lateOrders.length > 3 ? "…" : ""}.
-        </p>
-      )}
 
       <section className="customer-account" aria-label="Account summary">
         <div className={cn("customer-account__balance", state === "due" && "is-due", state === "advance" && "is-advance")}>
@@ -236,10 +230,9 @@ export default function DistributorPage() {
         ) : (
           <div className="purchases-line-table overflow-x-auto rounded-xl border">
             <table className="w-full min-w-[760px] text-sm">
-              <thead><tr><th className="px-3 py-2">PO</th><th className="px-3 py-2">Items</th><th className="px-3 py-2 text-right">Ordered</th><th className="px-3 py-2 text-right">Received</th><th className="px-3 py-2">Expected</th><th className="px-3 py-2">Status</th></tr></thead>
+              <thead><tr><th className="px-3 py-2">PO</th><th className="px-3 py-2">Items</th><th className="px-3 py-2 text-right">Ordered</th><th className="px-3 py-2 text-right">Received</th><th className="px-3 py-2">Status</th></tr></thead>
               <tbody>
                 {orders.map((o) => {
-                  const late = OPEN.includes(o.status) && !!o.expectedDate && o.expectedDate.slice(0, 10) < today;
                   return (
                     <tr key={o.id}>
                       <td className="px-3 py-2">
@@ -249,7 +242,6 @@ export default function DistributorPage() {
                       <td className="max-w-[16rem] truncate px-3 py-2 text-xs text-gray-600" title={o.items.join(", ")}>{o.items.join(", ") || "—"}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{money(o.orderedValue)}</td>
                       <td className="whitespace-nowrap px-3 py-2 text-right font-semibold tabular-nums text-blue-700">{money(o.receivedValue)}</td>
-                      <td className={cn("whitespace-nowrap px-3 py-2 text-xs", late ? "font-semibold text-red-600" : "text-gray-600")}>{formatDate(o.expectedDate)}{late && <span className="block">Late</span>}</td>
                       <td className="px-3 py-2"><Badge tone={statusTone(o.status)}>{STATUS_LABEL[o.status]}</Badge></td>
                     </tr>
                   );

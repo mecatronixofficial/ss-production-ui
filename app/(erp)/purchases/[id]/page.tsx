@@ -8,13 +8,14 @@ import { api } from "@/lib/api";
 import { confirmDialog } from "@/lib/confirm-store";
 import {
   codeLabel,
-  dueText,
   isOpen,
-  isOverdue,
   orderValue,
+  purchaseLineTotals,
+  purchaseTotals,
   qty,
   receiptValue,
   receivedQuantity,
+  receivedOrderValue,
   remainingQuantity,
   STATUS_LABEL,
   statusTone,
@@ -94,9 +95,9 @@ export default function PurchaseOrderPage() {
   };
 
   const total = orderValue(po);
-  const receivedValue = po.items.reduce((sum, item) => sum + receivedQuantity(item) * Number(item.rate ?? 0), 0);
+  const totals = purchaseTotals(po.items);
+  const receivedValue = receivedOrderValue(po);
   const receivedPct = total > 0 ? Math.min(100, Math.round((receivedValue / total) * 100)) : 0;
-  const due = dueText(po);
   const itemById = new Map(po.items.map((item) => [item.id, item]));
   const warehouses = context?.warehouses ?? [];
 
@@ -142,16 +143,9 @@ export default function PurchaseOrderPage() {
       <Card className="purchases-card purchases-card--po">
         <CardContent className="space-y-4">
           <dl className="purchases-po-facts">
-            <div><dt className="erp-label">Distributor</dt><dd className="font-semibold">{po.supplier.code} · {po.supplier.name}</dd></div>
+            <div><dt className="erp-label">{po.supplier.partyType === "MILL" ? "Mill" : "Distributor"}</dt><dd className="font-semibold">{po.supplier.code} · {po.supplier.name}</dd></div>
             <div><dt className="erp-label">Deliver to</dt><dd className="font-semibold">{po.warehouse ? `${po.warehouse.code} · ${po.warehouse.name}` : "—"}</dd></div>
             <div><dt className="erp-label">Ordered on</dt><dd>{formatDate(po.orderDate)}</dd></div>
-            <div>
-              <dt className="erp-label">Expected</dt>
-              <dd className={cn(isOverdue(po) && "font-semibold text-red-600")}>
-                {formatDate(po.expectedDate)}
-                {due && <span className={cn("block text-[11px]", !isOverdue(po) && "text-gray-400")}>{due}</span>}
-              </dd>
-            </div>
           </dl>
           <div className="purchases-po-values">
             <div><span>Ordered</span><strong>{money(total)}</strong></div>
@@ -182,12 +176,15 @@ export default function PurchaseOrderPage() {
                   <th className="px-3 py-2.5 text-right">Received</th>
                   <th className="px-3 py-2.5 text-right">{po.status === "CLOSED" ? "Not delivered" : "Remaining"}</th>
                   <th className="px-3 py-2.5 text-right">Rate</th>
-                  <th className="px-3 py-2.5 text-right">Amount</th>
+                  <th className="px-3 py-2.5 text-right">GST %</th>
+                  <th className="px-3 py-2.5 text-right">GST amount</th>
+                  <th className="px-3 py-2.5 text-right">Total amount</th>
                 </tr>
               </thead>
               <tbody>
                 {po.items.map((item) => {
                   const ordered = Number(item.quantity);
+                  const amounts = purchaseLineTotals(item);
                   const pct = ordered > 0 ? Math.min(100, (receivedQuantity(item) / ordered) * 100) : 0;
                   return (
                     <tr key={item.id}>
@@ -203,13 +200,17 @@ export default function PurchaseOrderPage() {
                       <td className="px-3 py-2 text-right text-blue-700">{qty(receivedQuantity(item), item.unit)}</td>
                       <td className="px-3 py-2 text-right font-semibold">{remainingQuantity(item) > 0 ? qty(remainingQuantity(item), item.unit) : <span className="text-emerald-700">Complete</span>}</td>
                       <td className="px-3 py-2 text-right">{money(item.rate ?? 0)}</td>
-                      <td className="px-3 py-2 text-right font-semibold">{money(ordered * Number(item.rate ?? 0))}</td>
+                      <td className="px-3 py-2 text-right">{Number(item.gstRate ?? 0)}%</td>
+                      <td className="px-3 py-2 text-right tabular-nums">{money(amounts.gstAmount)}</td>
+                      <td className="px-3 py-2 text-right font-semibold tabular-nums">{money(amounts.totalAmount)}</td>
                     </tr>
                   );
                 })}
               </tbody>
               <tfoot>
-                <tr><td colSpan={5} className="px-3 py-2.5 text-right font-bold">Order total</td><td className="px-3 py-2.5 text-right font-black">{money(total)}</td></tr>
+                <tr><td colSpan={7} className="px-3 py-2 text-right">Subtotal</td><td className="px-3 py-2 text-right tabular-nums">{money(totals.subtotal)}</td></tr>
+                <tr><td colSpan={7} className="px-3 py-2 text-right">Total GST</td><td className="px-3 py-2 text-right tabular-nums">{money(totals.gstAmount)}</td></tr>
+                <tr><td colSpan={7} className="px-3 py-2.5 text-right font-bold">Grand total</td><td className="px-3 py-2.5 text-right font-black tabular-nums">{money(total)}</td></tr>
               </tfoot>
             </table>
           </div>

@@ -1,7 +1,7 @@
 import type { NextConfig } from "next";
 
 const isDev = process.env.NODE_ENV !== "production";
-const backendUrl = (process.env.BACKEND_URL || (isDev ? "http://localhost:4000" : ""))
+const backendUrl = (process.env.BACKEND_URL?.trim() || (isDev ? "http://localhost:4000" : "https://ss-production-server.vercel.app"))
   .replace(/\/$/, "");
 
 const securityHeaders = [
@@ -28,9 +28,6 @@ const nextConfig: NextConfig = {
     return [{ source: "/:path*", headers: securityHeaders }];
   },
   async rewrites() {
-    if (!backendUrl) {
-      throw new Error("BACKEND_URL must be set to the backend origin (see .env.example)");
-    }
     return [
       {
         source: "/api/:path*",

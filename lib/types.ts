@@ -57,7 +57,6 @@ export type DashboardData = {
       currentKg: number;
       lossPct: number;
       daysInStage: number;
-      dueDate: string | null;
       place: string;
     }>;
     lastDeliveryAt: string | null;

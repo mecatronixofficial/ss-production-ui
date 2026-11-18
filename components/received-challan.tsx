@@ -27,7 +27,7 @@ function ChallanDocument({ challan }: { challan: ReceivedChallan }) {
           <p className="sale-bill__label">Received from</p>
           <p className="font-bold">{s.name}</p>
           {s.company && s.company !== s.name && <p className="text-xs text-gray-600">{s.company}</p>}
-          <p className="text-xs text-gray-600">Distributor {s.code}{s.contactPerson ? ` · ${s.contactPerson}` : ""}{s.mobile ? ` · ${s.mobile}` : ""}</p>
+          <p className="text-xs text-gray-600">{s.partyType === "MILL" ? "Mill" : "Distributor"} {s.code}{s.contactPerson ? ` · ${s.contactPerson}` : ""}{s.mobile ? ` · ${s.mobile}` : ""}</p>
           {s.address && <p className="text-xs text-gray-600">{s.address}</p>}
           {s.gst && <p className="text-xs font-semibold text-gray-700">GSTIN {s.gst}</p>}
         </div>
@@ -44,9 +44,9 @@ function ChallanDocument({ challan }: { challan: ReceivedChallan }) {
       <dl className="challan-facts">
         <div><dt className="sale-bill__label">Purchase order</dt><dd>{po.poNo}</dd></div>
         <div><dt className="sale-bill__label">PO date</dt><dd>{formatDate(po.orderDate)}</dd></div>
-        <div><dt className="sale-bill__label">Distributor challan / invoice</dt><dd>{challan.challanNo || "—"}</dd></div>
+        <div><dt className="sale-bill__label">Supplier challan / invoice</dt><dd>{challan.challanNo || "—"}</dd></div>
         <div><dt className="sale-bill__label">Vehicle no</dt><dd>{challan.vehicleNo || "—"}</dd></div>
-        <div><dt className="sale-bill__label">Distributor lot</dt><dd>{challan.lotNo || "—"}</dd></div>
+        <div><dt className="sale-bill__label">Supplier lot</dt><dd>{challan.lotNo || "—"}</dd></div>
         <div><dt className="sale-bill__label">Received at</dt><dd>{formatDateTime(challan.receivedAt)}</dd></div>
         <div><dt className="sale-bill__label">Received by</dt><dd>{challan.receivedBy || "—"}</dd></div>
         <div><dt className="sale-bill__label">PO status now</dt><dd>{STATUS_LABEL[po.status]}</dd></div>

@@ -48,7 +48,6 @@ export type OpenTask = {
   knittingLl: string | null;
   knittingPartyDetails: string | null;
   knittingDate: string | null;
-  knittingExpectedFinishDate: string | null;
   knittingRuns: TaskRun[];
   knittedKg: number;
   remainingKg: number;
@@ -123,7 +122,6 @@ export type KnitRun = {
     fabricGsm: string | null;
     knittingGg: string | null;
     knittingLl: string | null;
-    knittingExpectedFinishDate: string | null;
     knittingFinishedAt: string | null;
     /** Fabric knitted on the whole task, every machine. */
     knittedKg: number;

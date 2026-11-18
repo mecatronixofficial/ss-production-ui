@@ -3,7 +3,8 @@ import { todayInput, unitQty } from "@/lib/utils";
 
 /** Purchase orders as `/procurement/purchase-orders` and `/procurement/incoming` return them. */
 export type PurchaseStatus = "ORDERED" | "PARTIALLY_RECEIVED" | "RECEIVED" | "CANCELLED" | "CLOSED";
-export type PurchaseSupplier = { id: string; code: string; name: string; materialCategory?: string | null };
+export type PurchaseSupplier = { id: string; code: string; name: string; materialCategory?: string | null; millId?: string | null; partyType?: "DISTRIBUTOR" | "MILL" };
+export type PurchaseContext = { suppliers: PurchaseSupplier[]; mills?: PurchaseSupplier[]; warehouses: PurchaseWarehouse[] };
 export type PurchaseWarehouse = { id: string; code: string; name: string };
 export type PurchaseItem = {
   id: string;
@@ -16,6 +17,11 @@ export type PurchaseItem = {
   unit: string;
   /** Null for warehouse staff and managers: they see what to receive, not prices. */
   rate: string | null;
+  /** Defaults to zero for orders made before per-item GST was introduced. */
+  gstRate?: string | null;
+  subtotal?: string | null;
+  gstAmount?: string | null;
+  totalAmount?: string | null;
   /** Its details as ordered (yarn count, quality, blend, mill, bags…; fabric type, dia, GSM, colour…). */
   specs?: ItemSpec[] | null;
   receiptItems: Array<{ quantity: string }>;
@@ -108,7 +114,7 @@ export type ReceivedChallan = {
   receivedBy: string | null;
   warehouse: { id: string; code: string; name: string; location: string | null };
   purchaseOrder: { id: string; poNo: string; orderDate: string; expectedDate: string | null; status: PurchaseStatus; warehouse: PurchaseWarehouse | null };
-  supplier: { id: string; code: string; name: string; company: string | null; contactPerson: string | null; mobile: string | null; gst: string | null; address: string | null };
+  supplier: { id: string; code: string; name: string; company: string | null; contactPerson: string | null; mobile: string | null; gst: string | null; address: string | null; millId?: string | null; partyType?: "DISTRIBUTOR" | "MILL" };
   lines: Array<{
     id: string;
     itemName: string;
@@ -142,6 +148,9 @@ export type PurchaseOrder = {
   warehouse?: PurchaseWarehouse | null;
   items: PurchaseItem[];
   receipts: PurchaseReceipt[];
+  subtotal?: string | null;
+  gstAmount?: string | null;
+  totalAmount?: string | null;
 };
 
 /** Purchase orders that can still receive material. */
@@ -159,14 +168,34 @@ export const KG_CATEGORIES: StockCategory[] = ["YARN", "GREY_FABRIC", "DYED_FABR
 
 export const receivedQuantity = (item: PurchaseItem) => item.receiptItems.reduce((sum, receipt) => sum + Number(receipt.quantity), 0);
 export const remainingQuantity = (item: PurchaseItem) => Math.max(0, Number(item.quantity) - receivedQuantity(item));
-export const orderValue = (po: PurchaseOrder) => po.items.reduce((sum, item) => sum + Number(item.quantity) * Number(item.rate ?? 0), 0);
+/** Round each line's taxable value and GST to paise, as the backend does. */
+export function purchaseLineTotals(item: { quantity: string | number; rate: string | number | null; gstRate?: string | number | null }) {
+  const quantity = Math.round(Number(item.quantity || 0) * 1000);
+  const rate = Math.round(Number(item.rate || 0) * 100);
+  const gstRate = Math.round(Number(item.gstRate || 0) * 100);
+  const subtotal = Math.round(quantity * rate / 1000);
+  const gstAmount = Math.round(subtotal * gstRate / 10000);
+  return { subtotal: subtotal / 100, gstAmount: gstAmount / 100, totalAmount: (subtotal + gstAmount) / 100 };
+}
+
+export function purchaseTotals(items: Parameters<typeof purchaseLineTotals>[0][]) {
+  const totals = items.reduce((sum, item) => {
+    const line = purchaseLineTotals(item);
+    return { subtotal: sum.subtotal + Math.round(line.subtotal * 100), gstAmount: sum.gstAmount + Math.round(line.gstAmount * 100) };
+  }, { subtotal: 0, gstAmount: 0 });
+  return { subtotal: totals.subtotal / 100, gstAmount: totals.gstAmount / 100, totalAmount: (totals.subtotal + totals.gstAmount) / 100 };
+}
+
+export const orderValue = (po: PurchaseOrder) => purchaseTotals(po.items).totalAmount;
+/** Value received against the order, including its item GST. Receipt challans keep their material value before GST. */
+export const receivedOrderValue = (po: PurchaseOrder) => purchaseTotals(po.items.map((item) => ({ ...item, quantity: receivedQuantity(item) }))).totalAmount;
 /** What one goods receipt is worth at the PO's rates. */
 export const receiptValue = (po: PurchaseOrder, receipt: PurchaseReceipt) =>
   receipt.items.reduce((sum, line) => sum + Number(line.quantity) * Number(po.items.find((item) => item.id === line.purchaseOrderItemId)?.rate ?? 0), 0);
 export const isOpen = (po: PurchaseOrder) => OPEN_STATUSES.includes(po.status);
 /** Value still to arrive; nothing on a finished, cancelled or closed PO. */
 export const pendingValue = (po: PurchaseOrder) =>
-  isOpen(po) ? po.items.reduce((sum, item) => sum + remainingQuantity(item) * Number(item.rate ?? 0), 0) : 0;
+  isOpen(po) ? Math.max(0, Math.round((orderValue(po) - receivedOrderValue(po)) * 100) / 100) : 0;
 export const isOverdue = (po: PurchaseOrder) => isOpen(po) && !!po.expectedDate && po.expectedDate.slice(0, 10) < todayInput();
 /** Whole days from today to the expected date: negative when late, null when no date is set. */
 export const daysToExpected = (po: Pick<PurchaseOrder, "expectedDate">) =>

@@ -67,7 +67,7 @@ const FILTERS: Array<{ value: Filter; label: string }> = [
 /**
  * Yarn on purchase orders, line by line, like the yarn received register: each count ordered with its details (count,
  * quality, blend, mill, shade, bags), ordered against received and still to come, and the yarn's code and where it is
- * now. A line opens into every receipt (the distributor's DC, the weight weighed against it, bags, each ordered detail
+ * now. A line opens into every receipt (the supplier's DC, the weight weighed against it, bags, each ordered detail
  * checked, its received challan), the yarn in stock, at knitting and back, and the knitting batches it went into.
  */
 export function YarnPurchases({ showPrices, onChallan }: { showPrices: boolean; onChallan: (receiptId: string) => void }) {
@@ -112,7 +112,7 @@ export function YarnPurchases({ showPrices, onChallan }: { showPrices: boolean; 
   const exportCsv = () =>
     downloadCsv(
       "yarn-purchases.csv",
-      ["PO No", "Order date", "Distributor", "Count / item", "Details", "Bags", "Ordered", "Received", "To come", "Unit", ...(showPrices ? ["Rate", "Amount"] : []), "Yarn code", "Receipts (GRN · DC · qty)", "In stock KG", "At knitting KG"],
+      ["PO No", "Order date", "Supplier", "Count / item", "Details", "Bags", "Ordered", "Received", "To come", "Unit", ...(showPrices ? ["Rate", "Amount"] : []), "Yarn code", "Receipts (GRN · DC · qty)", "In stock KG", "At knitting KG"],
       lines.map((l) => [
         l.po.poNo,
         l.po.orderDate.slice(0, 10),
@@ -147,10 +147,10 @@ export function YarnPurchases({ showPrices, onChallan }: { showPrices: boolean; 
       <div className="yarn-reg__filters">
         <label className="yarn-reg__find">
           <Search size={15} aria-hidden />
-          <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find a yarn code, count, PO, distributor, GRN, DC or knitting batch" aria-label="Find" />
+          <Input value={find} onChange={(e) => setFind(e.target.value)} placeholder="Find a yarn code, count, PO, supplier, GRN, DC or knitting batch" aria-label="Find" />
         </label>
-        <select className="erp-input w-48" value={supplier} onChange={(e) => setSupplier(e.target.value)} aria-label="Distributor">
-          <option value="">All distributors</option>
+        <select className="erp-input w-48" value={supplier} onChange={(e) => setSupplier(e.target.value)} aria-label="Supplier">
+          <option value="">All suppliers</option>
           {suppliers.map((s) => <option key={s} value={s}>{s}</option>)}
         </select>
         <div className="yarn-reg__states" role="group" aria-label="Show">
@@ -172,7 +172,7 @@ export function YarnPurchases({ showPrices, onChallan }: { showPrices: boolean; 
             <table className="yarn-sheet__table">
               <thead>
                 <tr>
-                  <th>Order</th><th>Distributor</th><th>Count · details</th><th className="num">Bags</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">To come</th>
+                  <th>Order</th><th>Supplier</th><th>Count · details</th><th className="num">Bags</th><th className="num">Ordered</th><th className="num">Received</th><th className="num">To come</th>
                   {showPrices && <th className="num">Rate</th>}
                   <th>Yarn code</th><th>Now</th>
                 </tr>
@@ -242,8 +242,8 @@ function LineDetail({ line: l, showPrices, onChallan }: { line: YarnLine; showPr
           <p className="yarn-detail__label">Ordered</p>
           <dl className="yarn-detail__facts">
             <div><dt>Purchase order</dt><dd>{l.po.poNo} · {formatDate(l.po.orderDate)}</dd></div>
-            <div><dt>Distributor</dt><dd>{l.po.supplier.name} · {l.po.supplier.code}</dd></div>
-            <div><dt>Quantity</dt><dd>{qty(l.orderedQty, l.unit)}{l.po.expectedDate ? ` · expected ${formatDate(l.po.expectedDate)}` : ""}</dd></div>
+            <div><dt>Supplier</dt><dd>{l.po.supplier.name} · {l.po.supplier.code}</dd></div>
+            <div><dt>Quantity</dt><dd>{qty(l.orderedQty, l.unit)}</dd></div>
             <div><dt>Deliver to</dt><dd>{l.po.warehouse?.code ?? "—"}</dd></div>
             {showPrices && <div><dt>Rate · value</dt><dd>{l.rate === null ? "—" : `${money(l.rate)} / ${l.unit} · ${money(l.amount ?? 0)}`}</dd></div>}
             {l.specs.map((s) => <div key={s.label}><dt>{s.label}</dt><dd>{s.value}</dd></div>)}

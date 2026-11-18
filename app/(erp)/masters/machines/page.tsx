@@ -19,6 +19,7 @@ import { ADMIN_ROLES } from "@/lib/navigation";
 import { MachineExpensesView } from "./costs";
 import { FloorClock, MachineTile, OperatorsPanel } from "./floor";
 import { MachineDialog } from "./machine-dialog";
+import { MachineProductionReport } from "./production-report";
 import { AssignMachinesDialog, CompleteTaskDialog, DayEntryDialog, FinishRunDialog, MoveRunDialog, TaskProgress } from "./run-dialogs";
 import {
   addDays,
@@ -52,7 +53,7 @@ type Open =
   | { kind: "move"; runId: string }
   | { kind: "complete"; task: OpenTask }
   | null;
-type View = "floor" | "tasks" | "operators" | "register" | "expenses";
+type View = "floor" | "tasks" | "operators" | "register" | "reports" | "expenses";
 type RunFilter = "ALL" | "RUNNING" | "FINISHED";
 
 const VIEWS: Array<{ value: View; label: string; adminOnly?: boolean }> = [
@@ -60,6 +61,7 @@ const VIEWS: Array<{ value: View; label: string; adminOnly?: boolean }> = [
   { value: "tasks", label: "Tasks" },
   { value: "operators", label: "Operators" },
   { value: "register", label: "Runs" },
+  { value: "reports", label: "Reports" },
   // Money: admins only, like every price on this page.
   { value: "expenses", label: "Machine expenses", adminOnly: true },
 ];
@@ -171,14 +173,9 @@ export default function MachinesPage() {
       row.days += days.length;
       byMachine.set(r.machine.id, row);
     }
-    const lateTasks = data.tasks.filter((t) => {
-      const due = t.knittingExpectedFinishDate?.slice(0, 10);
-      return !!due && due < today;
-    });
     return {
       chart,
       topMachines: [...byMachine.values()].sort((a, b) => b.kg - a.kg).slice(0, 5),
-      lateTasks,
       runs,
       running,
       runOn,
@@ -280,8 +277,6 @@ export default function MachinesPage() {
   const attention: Array<{ key: string; tone: "danger" | "warning" | "info"; kind: AttentionKind; text: string; action: string; onClick: () => void }> = [];
   if (derived.counts.repair > 0)
     attention.push({ key: "repair", tone: "danger", kind: "machines", text: `${derived.counts.repair} machine${derived.counts.repair === 1 ? " is" : "s are"} broken down and under repair`, action: "Show", onClick: () => pickState("repair") });
-  if (derived.lateTasks.length > 0)
-    attention.push({ key: "late", tone: "danger", kind: "production", text: `${derived.lateTasks.length} knitting task${derived.lateTasks.length === 1 ? " is" : "s are"} past the required date (${derived.lateTasks[0].flowNo}${derived.lateTasks.length > 1 ? "…" : ""})`, action: "Tasks", onClick: () => setView("tasks") });
   if (derived.missing.length > 0)
     attention.push({ key: "missing", tone: "warning", kind: "machines", text: `${formatDate(derived.lastDay)} not entered for ${derived.missing.map((r) => r.machine.code).join(", ")}`, action: "Enter it", onClick: () => setOpen({ kind: "day", date: derived.lastDay }) });
   if (derived.waiting.length > 0)
@@ -305,11 +300,12 @@ export default function MachinesPage() {
       <header className="knit-floor">
         <div className="knit-floor__main">
           <div className="min-w-0">
-            <p className="knit-eyebrow"><span className="knit-live-dot" aria-hidden /> Knitting floor · live</p>
-            <h1 className="knit-hero__title">Machines</h1>
-            <p className="mt-1 max-w-xl text-sm text-white/65">Every machine and what it is knitting. Enter each machine&apos;s KG and rolls at the end of the day; change a broken machine for another.</p>
+            <p className="knit-eyebrow">{view === "reports" ? "Production reports" : <><span className="knit-live-dot" aria-hidden /> Knitting floor · live</>}</p>
+            <h1 className="knit-hero__title">{view === "reports" ? "Machine reports" : "Machines"}</h1>
+            <p className="mt-1 max-w-xl text-sm text-white/65">{view === "reports" ? "Review production by day, week, month, year or a custom date range, for all machines or one machine." : <>Every machine and what it is knitting. Enter each machine&apos;s KG and rolls at the end of the day; change a broken machine for another.</>}</p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
+            <Button variant="ghost" className="knit-ghost" aria-pressed={view === "reports"} onClick={() => setView("reports")}><BarChart3 size={15} />Reports</Button>
             {derived.runs.length > 0 && <Button className="knit-cta" onClick={() => setOpen({ kind: "day" })}><CalendarCheck size={15} /> Day-end entry</Button>}
             {isAdmin && <Button variant="ghost" className="knit-ghost" onClick={() => setOpen({ kind: "machine", machine: null })}><Plus size={15} /> Add machine</Button>}
             <Button variant="ghost" className="knit-ghost" disabled={refreshing} onClick={() => void reload()} title={`Updated ${updatedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}; refreshes by itself every 2 minutes`}>
@@ -320,6 +316,7 @@ export default function MachinesPage() {
         <FloorClock />
       </header>
 
+      {view !== "reports" && <>
       <div className="knit-states" role="group" aria-label="Machines by state">
         {STATES.map((s) => (
           <button key={s} type="button" aria-pressed={stateFilter === s} className={cn("knit-statecard", `is-${s}`, stateFilter === s && "is-active")} onClick={() => pickState(s)}>
@@ -425,11 +422,12 @@ export default function MachinesPage() {
         </div>
       </section>
 
+      </>}
       <nav className="knit-views" role="tablist" aria-label="Machines page">
         {views.map((v) => (
           <button key={v.value} type="button" role="tab" aria-selected={view === v.value} className={cn(view === v.value && "is-active", v.adminOnly && "is-money")} onClick={() => setView(v.value)}>
             {v.label}
-            {!v.adminOnly && <span>{v.value === "floor" ? data.machines.length : v.value === "tasks" ? tasks.length : v.value === "operators" ? onMachines : derived.runs.length}</span>}
+            {!v.adminOnly && v.value !== "reports" && <span>{v.value === "floor" ? data.machines.length : v.value === "tasks" ? tasks.length : v.value === "operators" ? onMachines : derived.runs.length}</span>}
           </button>
         ))}
       </nav>
@@ -503,11 +501,9 @@ export default function MachinesPage() {
             ) : (
               <div className="overflow-x-auto rounded-xl border">
                 <table className="knit-table w-full min-w-[1000px] text-sm">
-                  <thead><tr><th>Task</th><th>Fabric</th><th>Yarn</th><th>Progress</th><th>On machines</th><th>Required by</th><th /></tr></thead>
+                  <thead><tr><th>Task</th><th>Fabric</th><th>Yarn</th><th>Progress</th><th>On machines</th><th /></tr></thead>
                   <tbody>
                     {tasks.map((task) => {
-                      const due = task.knittingExpectedFinishDate?.slice(0, 10);
-                      const late = !!due && due < derived.today;
                       const canComplete = task.running.length === 0 && task.knittedKg > EMPTY;
                       return (
                         <tr key={task.id}>
@@ -524,10 +520,6 @@ export default function MachinesPage() {
                             ) : (
                               <span className="text-xs font-semibold text-amber-700">{task.knittingRuns.length ? "Stopped · waiting for a machine" : "Waiting for a machine"}</span>
                             )}
-                          </td>
-                          <td className={cn("text-xs", late ? "font-semibold text-red-600" : "text-gray-600")}>
-                            {due ? formatDate(due) : "No due date"}
-                            {late && <span className="block">Overdue</span>}
                           </td>
                           <td>
                             <span className="flex justify-end gap-1.5">
@@ -635,6 +627,7 @@ export default function MachinesPage() {
         </section>
       )}
 
+      {view === "reports" && <MachineProductionReport />}
       {view === "expenses" && isAdmin && <MachineExpensesView machines={data.machines} runs={derived.runs} />}
 
       {open?.kind === "complete" && <CompleteTaskDialog task={open.task} onClose={() => setOpen(null)} onCompleted={done} />}

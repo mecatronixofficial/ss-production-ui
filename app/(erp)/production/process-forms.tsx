@@ -15,6 +15,7 @@ import { SearchableSelect } from "@/components/ui/searchable-select";
 import { Attachments } from "./attachments";
 import { DyeingLotsInput, firstLines, lotsPayload, lotsProblem } from "./dyeing-lots";
 import { ChargeInput, DestinationToggle, Field, FieldGroup } from "./fields";
+import { currentShift, shiftIndex, type KnitRun, type Shift } from "../masters/machines/types";
 import { greyToDye, isKnitting, knittingEditable, leftToDeliver, localDate, lotStage, numeric, shortDate, warehouseDelivery, weightCheck, WEIGHT_TOLERANCE_KG, type AttachmentStage, type FabricFlow, type FlowDelivery, type FlowDirectory, type RunStage } from "./types";
 
 type Process = "dyeing" | "compacting";
@@ -333,6 +334,9 @@ export function DyeingForm({ flow, directory, saving, run, onFilesChanged, showP
     destination: flow.dyeingDestination ?? "NEXT_PROCESS",
     warehouseId: flow.dyeingDestinationWarehouseId ?? "",
     nextMill: (flow.dyeingDestination === "NEXT_PROCESS" && (flow.compactingMillDetails ?? flow.compactingPartyDetails)) || "",
+    nextStartDate: "",
+    nextInwardNo: "",
+    nextNotes: "",
     // More details
     startDate: localDate(flow.dyeingDate),
     mill: flow.dyeingMillDetails ?? flow.dyeingPartyDetails ?? "",
@@ -344,6 +348,9 @@ export function DyeingForm({ flow, directory, saving, run, onFilesChanged, showP
   const set = (changes: Partial<typeof f>) => setF((current) => ({ ...current, ...changes }));
   const toWarehouse = f.destination === "WAREHOUSE";
   const toParty = f.destination === "PARTY";
+  const toNextProcess = f.destination === "NEXT_PROCESS";
+  const compactingStartDate = f.nextStartDate || f.finishedDate;
+  const compactingStartWeight = f.sentOn ? numeric(f.sentOn) : numeric(f.output);
   const [sale, setSale] = useState<PartyDraft>(() => (flow.dyeingDestination === "PARTY" ? partySale(flow) : { party: "", amount: "", deliveryCost: "" }));
   // Grey fabric dyeing didn't use, back into a warehouse (a lot's under its knitting batch's code).
   const [balance, setBalance] = useState({ kg: flow.dyeingBalanceKg ? String(flow.dyeingBalanceKg) : "", warehouseId: "" });
@@ -368,7 +375,10 @@ export function DyeingForm({ flow, directory, saving, run, onFilesChanged, showP
     !f.mill.trim() ? "Choose the dyeing mill under More details." :
     balanceProblem("grey fabric", flow.dyeingDeliveryKg, received, balance.kg, balance.warehouseId) ||
     (toParty ? (!sale.party.trim() ? "Enter the party it goes to." : sentCheck.error ?? "") :
-    toWarehouse ? (!f.warehouseId ? "Choose the warehouse." : sentCheck.error ?? "") : !f.nextMill.trim() ? "Choose the compacting mill." : sentCheck.error ?? ""));
+    toWarehouse ? (!f.warehouseId ? "Choose the warehouse." : sentCheck.error ?? "") : !f.nextMill.trim() ? "Choose the compacting mill." :
+    !(compactingStartWeight > 0) ? "Enter the weight sent to compacting." :
+    !compactingStartDate || compactingStartDate < f.finishedDate ? "Compacting must start on or after dyeing is completed." :
+    compactingStartDate > localDate() ? "Compacting cannot start on a future date." : sentCheck.error ?? ""));
 
   const save = () =>
     run(
@@ -393,6 +403,7 @@ export function DyeingForm({ flow, directory, saving, run, onFilesChanged, showP
             warehouseId: toWarehouse ? f.warehouseId : undefined,
             nextPartyDetails: f.destination === "NEXT_PROCESS" ? f.nextMill.trim() : undefined,
             nextMillDetails: f.destination === "NEXT_PROCESS" ? f.nextMill.trim() : undefined,
+            compactingStart: toNextProcess ? { startDate: compactingStartDate, receivedKg: compactingStartWeight, inwardNo: f.nextInwardNo.trim() || undefined, notes: f.nextNotes.trim() || undefined } : undefined,
             ...(toParty ? salePayload(sale) : {}),
             balanceKg: numeric(balance.kg) > 0 ? numeric(balance.kg) : 0,
             balanceWarehouseId: numeric(balance.kg) > 0 ? balance.warehouseId : undefined,
@@ -417,7 +428,7 @@ export function DyeingForm({ flow, directory, saving, run, onFilesChanged, showP
       ]}
       problem={problem}
       summary={<>In <b>{kg(received)}</b> → out <b>{kg(output)}</b> {changeText(received, output) && <>· {changeText(received, output)}</>}{showPrices && charges > 0 ? <> · charges <b>{money(charges)}</b>{received > 0 ? ` (${money(charges / received)} / KG)` : ""}</> : null}</>}
-      saveLabel={done ? "Save changes" : toParty ? "Complete & deliver to party" : toWarehouse ? "Complete & send to warehouse" : "Complete & send to compacting"}
+      saveLabel={toNextProcess ? "Complete dyeing & start compacting" : done ? "Save changes" : toParty ? "Complete & deliver to party" : "Complete & send to warehouse"}
       saving={saving}
       onSave={() => void save()}
       more={
@@ -462,7 +473,17 @@ export function DyeingForm({ flow, directory, saving, run, onFilesChanged, showP
           </select>
         </Field>
       ) : (
-        <Field label="Compacting mill" required><SearchableSelect placeholder="Search compacting mill or add new" options={directory.compactingMills} value={f.nextMill} onChange={(nextMill) => set({ nextMill })} /></Field>
+        <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+          <h3 className="text-sm font-bold text-[#123f35]">Send to compacting & start</h3>
+          <p className="mb-3 mt-1 text-xs text-gray-600">Complete dyeing and start compacting with these details in one step.</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Compacting mill" required><SearchableSelect placeholder="Search compacting mill or add new" options={directory.compactingMills} value={f.nextMill} onChange={(nextMill) => set({ nextMill })} /></Field>
+            <Field label="Compacting start date" required><Input type="date" min={f.finishedDate || undefined} max={localDate()} value={compactingStartDate} onChange={(e) => set({ nextStartDate: e.target.value })} /></Field>
+            <Field label="Compacting inward number" hint="Optional"><Input maxLength={80} value={f.nextInwardNo} onChange={(e) => set({ nextInwardNo: e.target.value })} /></Field>
+            <div className="text-xs text-gray-600"><p className="mb-1.5 font-semibold">Fabric sent to compacting</p><p className="font-bold text-gray-800">{kg(compactingStartWeight)}</p></div>
+            <Field label="Compacting instructions" hint="Optional" className="md:col-span-2"><Input maxLength={1000} value={f.nextNotes} onChange={(e) => set({ nextNotes: e.target.value })} /></Field>
+          </div>
+        </section>
       )}
     </ProcessShell>
   );
@@ -641,8 +662,14 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
   const knittedOnMachines = runs.reduce((sum, r) => sum + toNumber(r.outputKg ?? 0), 0);
   // Rolls entered day by day on the Machines page (null when none are entered there).
   const rollsOnMachines = runs.some((r) => r.rollCount !== null && r.rollCount !== undefined) ? runs.reduce((sum, r) => sum + (r.rollCount ?? 0), 0) : null;
+  const machinesBusy = own && onMachines.length > 0;
+  const machineRuns = useApiQuery<KnitRun[]>(machinesBusy ? "/knitting/runs" : null);
+  const [stopShift, setStopShift] = useState<Shift>(() => currentShift().shift);
+  const [stopWarehouseId, setStopWarehouseId] = useState("");
+  const [stopEdits, setStopEdits] = useState<Record<string, { outputKg: string; rolls: string }>>({});
+  const changeStop = (id: string, changes: Partial<{ outputKg: string; rolls: string }>) => setStopEdits((current) => ({ ...current, [id]: { ...(current[id] ?? { outputKg: "", rolls: "" }), ...changes } }));
   const [f, setF] = useState({
-    finishedDate: localDate(flow.knittingFinishedAt),
+    finishedDate: flow.knittingFinishedAt ? localDate(flow.knittingFinishedAt) : machinesBusy ? currentShift().date : localDate(),
     yarnUsed: String(flow.purchasedWeightKg),
     total: flow.knittingDeliveryKg !== null ? String(flow.knittingDeliveryKg) : own && knittedOnMachines > 0 ? String(Math.round(knittedOnMachines * 1000) / 1000) : "",
     rolls: flow.knittingBagCount ? String(flow.knittingBagCount) : own && rollsOnMachines ? String(rollsOnMachines) : "",
@@ -651,6 +678,8 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
     destination: flow.knittingDestination ?? "NEXT_PROCESS",
     warehouseId: flow.knittingDestinationWarehouseId ?? "",
     nextMill: (flow.knittingDestination === "NEXT_PROCESS" && (flow.dyeingMillDetails ?? flow.dyeingPartyDetails)) || "",
+    nextStartDate: "",
+    nextNotes: "",
     // More details
     reference: flow.knittingDestination !== "WAREHOUSE" && flow.knittingDeliveryPlace && flow.knittingDeliveryPlace !== flow.dyeingMillDetails ? flow.knittingDeliveryPlace : "",
     notes: flow.knittingNotes ?? "",
@@ -663,11 +692,37 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
   const set = (changes: Partial<typeof f>) => setF((current) => ({ ...current, ...changes }));
   const toWarehouse = f.destination === "WAREHOUSE";
   const toParty = f.destination === "PARTY";
+  const toNextProcess = f.destination === "NEXT_PROCESS";
+  const dyeingStartDate = f.nextStartDate || f.finishedDate;
+  const [dyeingLines, setDyeingLines] = useState(() => firstLines(flow.color ?? ""));
   const [sale, setSale] = useState<PartyDraft>(() => (flow.knittingDestination === "PARTY" ? partySale(flow) : { party: "", amount: "", deliveryCost: "" }));
   const yarnUsed = fromStock && numeric(f.yarnUsed) > 0 ? numeric(f.yarnUsed) : flow.purchasedWeightKg;
   const leftover = Math.max(0, given - yarnUsed);
-  const total = numeric(f.total);
-  const totalCheck = feedback(yarnUsed, f.total);
+  const finishMachines = onMachines.map((summary) => {
+    const detail = machineRuns.data?.find((run) => run.id === summary.id);
+    const edit = stopEdits[summary.id] ?? { outputKg: "", rolls: "" };
+    const otherDays = detail?.days.filter((day) => day.date.slice(0, 10) !== f.finishedDate) ?? [];
+    return { summary, detail, edit,
+      output: edit.outputKg !== "" ? otherDays.reduce((sum, day) => sum + day.outputKg, 0) + numeric(edit.outputKg) : toNumber(detail?.outputKg ?? summary.outputKg ?? 0),
+      rolls: edit.outputKg !== "" ? otherDays.reduce((sum, day) => sum + day.rollCount, 0) + numeric(edit.rolls) : detail?.rollCount ?? summary.rollCount ?? 0,
+    };
+  });
+  const stoppedRuns = runs.filter((run) => run.status !== "RUNNING");
+  const total = machinesBusy ? Math.round((stoppedRuns.reduce((sum, run) => sum + toNumber(run.outputKg ?? 0), 0) + finishMachines.reduce((sum, run) => sum + run.output, 0)) * 1000) / 1000 : numeric(f.total);
+  const totalValue = machinesBusy ? String(total) : f.total;
+  const rollsValue = machinesBusy ? String(stoppedRuns.reduce((sum, run) => sum + (run.rollCount ?? 0), 0) + finishMachines.reduce((sum, run) => sum + run.rolls, 0)) : f.rolls;
+  const fabricWarehouse = stopWarehouseId || (warehouses.length === 1 ? warehouses[0].id : "");
+  const totalCheck = feedback(yarnUsed, totalValue);
+  const now = currentShift();
+  const machineProblem = !machinesBusy ? "" :
+    machineRuns.loading ? "Loading machine production…" :
+    machineRuns.error ? "Could not load machine production. Retry below." :
+    finishMachines.some((run) => !run.detail || run.detail.status !== "RUNNING") ? "A machine run has changed. Refresh the batch before finishing." :
+    finishMachines.some((run) => !run.detail!.days.length && run.edit.outputKg === "") ? "Enter the final day's fabric and rolls for each machine below." :
+    finishMachines.some((run) => run.edit.outputKg !== "" && (!(numeric(run.edit.outputKg) > 0) || !/^\d+$/.test(run.edit.rolls.trim()))) ? "Enter positive final-day fabric and a whole number of rolls for each machine." :
+    finishMachines.some((run) => run.edit.outputKg !== "") && !fabricWarehouse ? "Choose the fabric warehouse for the final machine production." :
+    finishMachines.some((run) => shiftIndex(f.finishedDate, stopShift) < shiftIndex(run.detail!.startedAt, run.detail!.startShift) || run.detail!.days.some((day) => day.date.slice(0, 10) > f.finishedDate)) ? "The finish date or shift is before recorded machine production." :
+    shiftIndex(f.finishedDate, stopShift) > shiftIndex(now.date, now.shift) ? "Choose a finish shift that has already started." : "";
   // Start details changed under More details are saved first (they are their own record).
   const detailsChanged =
     !managerMode &&
@@ -682,20 +737,20 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
     : warehouseDelivery(flow, "KNITTING")?.receivedAt
       ? "The warehouse has received this grey fabric, so knitting can no longer be changed."
       : "Dyeing has received this grey fabric, so knitting can no longer be changed.";
-  const machinesBusy = own && onMachines.length > 0;
-
   const problem =
-    machinesBusy ? `Knitting on ${onMachines.map((r) => r.machine.code).join(", ")} now: stop the machines on the Machines page to finish it.` :
     !f.finishedDate ? "Enter the finished date." :
     f.finishedDate < f.startDate ? "Finished before knitting started." :
+    machineProblem ? machineProblem :
     fromStock && !(numeric(f.yarnUsed) > 0) ? "Enter the yarn used." :
     fromStock && numeric(f.yarnUsed) > given + EMPTY ? (pool ? `Only ${kg(given)} of the shared yarn is left for ${flow.flowNo}.` : `Only ${kg(given)} of yarn was given to knitting.`) :
     !(total > 0) ? "Enter the grey fabric weight." :
     totalCheck.error ??
-    (!/^\d+$/.test(f.rolls.trim()) || Number(f.rolls) < 1 ? "Enter the rolls (at least 1)." :
+    (!/^\d+$/.test(rollsValue.trim()) || Number(rollsValue) < 1 ? "Enter the rolls (at least 1)." :
     !own && !f.mill.trim() ? "Choose the knitting mill under More details." :
     toParty ? (!sale.party.trim() ? "Enter the party it goes to." : "") :
-    toWarehouse ? (!f.warehouseId ? "Choose the warehouse." : "") : !f.nextMill.trim() ? "Choose the dyeing mill." : "");
+    toWarehouse ? (!f.warehouseId ? "Choose the warehouse." : "") : !f.nextMill.trim() ? "Choose the dyeing mill." :
+    !dyeingStartDate || dyeingStartDate < f.finishedDate ? "Dyeing must start on or after knitting is finished." :
+    dyeingStartDate > localDate() ? "Dyeing cannot start on a future date." : lotsProblem(dyeingLines, total));
 
   const save = () =>
     run(async () => {
@@ -716,13 +771,19 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
         method: "POST",
         body: JSON.stringify({
           finishedDate: f.finishedDate,
-          rollCount: Math.floor(numeric(f.rolls)),
+          rollCount: Math.floor(numeric(rollsValue)),
           totalWeightKg: Math.round(total * 1000) / 1000,
+          ...(machinesBusy ? {
+            machineStops: finishMachines.map((run) => ({ runId: run.summary.id, ...(run.edit.outputKg !== "" ? { outputKg: numeric(run.edit.outputKg), rollCount: numeric(run.edit.rolls) } : {}) })),
+            stopShift,
+            stopWarehouseId: finishMachines.some((run) => run.edit.outputKg !== "") ? fabricWarehouse : undefined,
+          } : {}),
           destination: f.destination,
           warehouseId: toWarehouse ? f.warehouseId : undefined,
           deliveryPlace: toWarehouse ? "Warehouse delivery" : toParty ? sale.party.trim() : f.reference.trim() || f.nextMill.trim(),
           nextPartyDetails: f.destination === "NEXT_PROCESS" ? f.nextMill.trim() : undefined,
           nextMillDetails: f.destination === "NEXT_PROCESS" ? f.nextMill.trim() : undefined,
+          dyeingStart: toNextProcess ? { startDate: dyeingStartDate, lots: lotsPayload(dyeingLines), fabricReceivedKg: total, color: dyeingLines[0]?.color.trim(), notes: f.nextNotes.trim() || undefined } : undefined,
           ...(toParty ? salePayload(sale) : {}),
           knittingExpense: numeric(f.expense),
           notes: f.notes.trim() || undefined,
@@ -752,7 +813,7 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
         own && runs.length > 0 ? (
           <div className="pform__note">
             <b>{kg(knittedOnMachines)}</b> knitted on {runs.length} machine run{runs.length === 1 ? "" : "s"} ({runs.map((r) => `${r.machine.code}${r.status === "RUNNING" ? " running" : ""}`).join(", ")}), entered day by day on the Machines page.{" "}
-            <Link href="/masters/machines?view=tasks" className="font-semibold underline">Open Machines</Link>
+            {machinesBusy ? "Running machines will stop when this form is saved. Enter any final-day production below." : <Link href="/masters/machines?view=tasks" className="font-semibold underline">Open Machines</Link>}
           </div>
         ) : own && knitting ? (
           <div className="pform__note">No machine yet: put {flow.flowNo} on machines from the <Link href="/masters/machines?view=tasks" className="font-semibold underline">Machines</Link> page. Their KG and rolls are entered there each day.</div>
@@ -760,7 +821,7 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
       }
       problem={problem}
       summary={<>Yarn <b>{kg(yarnUsed)}</b>{leftover > EMPTY ? <> ({kg(leftover)} back to stock)</> : null} → grey fabric <b>{kg(total)}</b> {changeText(yarnUsed, total) && <>· {changeText(yarnUsed, total)}</>}{showPrices && charges > 0 ? <> · charges <b>{money(charges)}</b></> : null}</>}
-      saveLabel={knitting ? (toParty ? "Finish & deliver to party" : toWarehouse ? "Finish & send to warehouse" : "Finish & send to dyeing") : "Save changes"}
+      saveLabel={toNextProcess ? "Finish knitting & start dyeing" : knitting ? (toParty ? "Finish & deliver to party" : "Finish & send to warehouse") : "Save changes"}
       saving={saving}
       onSave={() => void save()}
       more={
@@ -777,7 +838,7 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
     >
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Finished on" required><Input type="date" min={f.startDate} max={localDate()} value={f.finishedDate} onChange={(e) => set({ finishedDate: e.target.value })} /></Field>
-        <Field label="Fabric made (KG)" required hint={`grey fabric · ±${WEIGHT_TOLERANCE_KG}`} error={totalCheck.error} warning={totalCheck.warning}><WeightInput value={f.total} onValueChange={(v) => set({ total: v })} autoFocus={knitting && !machinesBusy} /></Field>
+        <Field label="Fabric made (KG)" required hint={machinesBusy ? "Total from machine production below" : `grey fabric · ±${WEIGHT_TOLERANCE_KG}`} error={totalCheck.error} warning={totalCheck.warning}><WeightInput value={totalValue} readOnly={machinesBusy} onValueChange={(v) => set({ total: v })} autoFocus={knitting && !machinesBusy} /></Field>
         {fromStock && (
           <Field label="Yarn used (KG)" required hint={pool ? `${kg(given)} of shared yarn left` : `of ${kg(given)} given`}>
             <WeightInput value={f.yarnUsed} onValueChange={(yarnUsed) => set({ yarnUsed })} />
@@ -793,14 +854,37 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
         <Field
           label="Rolls"
           required
-          hint={own && rollsOnMachines !== null ? `${rollsOnMachines} entered on Machines` : "Grey fabric rolls"}
-          warning={own && rollsOnMachines !== null && f.rolls.trim() !== "" && Number(f.rolls) !== rollsOnMachines ? `The Machines page has ${rollsOnMachines} rolls; a new day entry there sets it back.` : undefined}
+          hint={machinesBusy ? "Total from machine production below" : own && rollsOnMachines !== null ? `${rollsOnMachines} entered on Machines` : "Grey fabric rolls"}
+          warning={!machinesBusy && own && rollsOnMachines !== null && f.rolls.trim() !== "" && Number(f.rolls) !== rollsOnMachines ? `The Machines page has ${rollsOnMachines} rolls; a new day entry there sets it back.` : undefined}
         >
-          <Input type="number" min="1" step="1" inputMode="numeric" value={f.rolls} onChange={(e) => set({ rolls: e.target.value })} />
+          <Input type="number" min="1" step="1" inputMode="numeric" readOnly={machinesBusy} value={rollsValue} onChange={(e) => set({ rolls: e.target.value })} />
         </Field>
         {showPrices && <ChargeInput label="Knitting charges" value={f.expense} weightKg={total} onChange={(expense) => set({ expense })} />}
         {showPrices && fromStock && <Field label="Yarn price" hint={`₹ / KG · ${money(yarnUsed * numeric(f.yarnRate))}`}><Input type="number" min="0" step="0.01" inputMode="decimal" value={f.yarnRate} onChange={(e) => set({ yarnRate: e.target.value })} /></Field>}
       </div>
+      {machinesBusy && (
+        <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+          <h3 className="text-sm font-bold text-[#123f35]">Finish the running machines</h3>
+          <p className="mb-3 mt-1 text-xs text-gray-600">Enter production from each machine for the finish date. Leave it blank to keep production already recorded for that day. The fabric and rolls above are calculated automatically.</p>
+          <div className="mb-3 grid gap-3 md:grid-cols-2">
+            <Field label="Machine finish shift" required><select className="erp-input" value={stopShift} onChange={(e) => setStopShift(e.target.value as Shift)}><option value="DAY">Day · 9 AM – 9 PM</option><option value="NIGHT">Night · 9 PM – 9 AM</option></select></Field>
+            <Field label="Fabric warehouse" required={finishMachines.some((run) => run.edit.outputKg !== "")} hint="Final production is recorded here before sending it on"><select className="erp-input" value={fabricWarehouse} onChange={(e) => setStopWarehouseId(e.target.value)}><option value="">Choose fabric warehouse</option>{warehouses.map((warehouse) => <option key={warehouse.id} value={warehouse.id}>{warehouse.code} · {warehouse.name}</option>)}</select></Field>
+          </div>
+          {machineRuns.error && <p role="alert" className="mb-2 text-xs text-rose-700">{machineRuns.error}</p>}
+          <div className="grid gap-3">
+            {finishMachines.map(({ summary, detail, edit }) => (
+              <div key={summary.id} className="rounded-xl border border-gray-200 bg-white p-3">
+                <p className="mb-2 text-xs font-bold text-gray-800">{summary.machine.code} · {summary.runNo}</p>
+                <div className="grid gap-3 md:grid-cols-2">
+                  <Field label={`Final-day fabric on ${summary.machine.code}`} hint={`KG · ${kg(detail?.outputKg ?? summary.outputKg ?? 0)} recorded so far`}><WeightInput value={edit.outputKg} onValueChange={(outputKg) => changeStop(summary.id, { outputKg })} /></Field>
+                  <Field label={`Final-day rolls on ${summary.machine.code}`} hint="Whole number"><Input type="number" min="0" step="1" inputMode="numeric" value={edit.rolls} onChange={(e) => changeStop(summary.id, { rolls: e.target.value })} /></Field>
+                </div>
+              </div>
+            ))}
+          </div>
+          <Button variant="outline" className="mt-3" disabled={machineRuns.loading} onClick={() => void machineRuns.reload()}>{machineRuns.loading ? "Loading production…" : "Refresh machine production"}</Button>
+        </section>
+      )}
       <FieldGroup label="Send the grey fabric to" required>
         <DestinationToggle value={f.destination} next="dyeing" onChange={(destination) => set({ destination, warehouseId: "" })} />
       </FieldGroup>
@@ -814,7 +898,16 @@ export function KnittingForm({ flow, directory, saving, run, onFilesChanged, sho
           </select>
         </Field>
       ) : (
-        <Field label="Dyeing mill" required><SearchableSelect placeholder="Search dyeing mill or add new" options={directory.dyeingMills} value={f.nextMill} onChange={(nextMill) => set({ nextMill })} /></Field>
+        <section className="rounded-2xl border border-emerald-100 bg-emerald-50/40 p-4">
+          <h3 className="text-sm font-bold text-[#123f35]">Send to dyeing & start</h3>
+          <p className="mb-3 mt-1 text-xs text-gray-600">Finish knitting and start the dyeing colours below in one step.</p>
+          <div className="grid gap-3 md:grid-cols-2">
+            <Field label="Dyeing mill" required><SearchableSelect placeholder="Search dyeing mill or add new" options={directory.dyeingMills} value={f.nextMill} onChange={(nextMill) => set({ nextMill })} /></Field>
+            <Field label="Dyeing start date" required><Input type="date" min={f.finishedDate || undefined} max={localDate()} value={dyeingStartDate} onChange={(e) => set({ nextStartDate: e.target.value })} /></Field>
+            <FieldGroup label="Dyeing colours" required hint={`${kg(total)} grey fabric`} className="md:col-span-2"><DyeingLotsInput lines={dyeingLines} onChange={setDyeingLines} available={total} batchCode={flow.flowNo} lotsSoFar={flow.lots.length} /></FieldGroup>
+            <Field label="Dyeing instructions" hint="Optional" className="md:col-span-2"><Input maxLength={1000} value={f.nextNotes} onChange={(e) => set({ nextNotes: e.target.value })} /></Field>
+          </div>
+        </section>
       )}
     </ProcessShell>
   );

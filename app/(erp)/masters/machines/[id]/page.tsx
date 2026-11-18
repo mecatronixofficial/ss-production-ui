@@ -17,6 +17,7 @@ import { ErrorState } from "@/components/page-state";
 import { Button } from "@/components/ui/button";
 import { MachineExpensesView } from "../costs";
 import { MachineDialog } from "../machine-dialog";
+import { MachineProductionReport } from "../production-report";
 import { AssignMachinesDialog, DayEntryDialog, FinishRunDialog, MoveRunDialog } from "../run-dialogs";
 import { currentShift, dayOf, daysOnMachine, EMPTY, fabricSpec, lastProductionDay, localMonth, monthKg, runHref, runOnDay, SHIFT_LABEL, shiftIndex, shiftText, type KnitBoard, type KnitMachine, type KnitRun, type Shift } from "../types";
 import "../machines.css";
@@ -207,6 +208,7 @@ export default function MachinePage() {
         </section>
       </div>
 
+      <MachineProductionReport machineId={id} />
       {isAdmin && machine && <MachineExpensesView machines={[machine]} runs={runs} machineId={machine.id} />}
 
       <section className="knit-card">

@@ -13,9 +13,17 @@ bun run dev            # http://localhost:3000
 
 | Variable | Purpose |
 | --- | --- |
-| `BACKEND_URL` | Backend origin. `/api/*` is proxied there by a Next.js rewrite, so auth cookies stay first-party. Required for `build`/`start`; defaults to `http://localhost:4000` in dev. |
+| `BACKEND_URL` | Optional backend-origin override. `/api/*` is proxied there by a Next.js rewrite, so auth cookies stay first-party. Defaults to `https://ss-production-server.vercel.app` in production and `http://localhost:4000` in dev. |
 | `NEXT_PUBLIC_API_URL` | API base path used by the browser (default `/api/v1`). |
 | `NEXT_PUBLIC_SITE_URL` | Public origin (e.g. `https://erp.example.com`) used for canonical URLs, Open Graph, `robots.txt` and `sitemap.xml`. Defaults to `http://localhost:3000`. |
+
+## Vercel deployment
+
+Production builds use `https://ss-production-server.vercel.app` automatically. To use a different backend, add `BACKEND_URL` in the frontend project's **Settings → Environment Variables**. Use the backend's HTTPS origin, without `/api` or `/api/v1`. A local address such as `http://localhost:8000` is for development only.
+
+Apply the variable to **Production** and **Preview** (including the `ssmills` branch if it is a preview branch), then redeploy. Environment changes apply to new deployments. Keep `NEXT_PUBLIC_API_URL=/api/v1`; the frontend proxies those requests to `BACKEND_URL` so login cookies stay first-party.
+
+Older commits that report `BACKEND_URL must be set` still require the variable. Deploy the updated config or set the variable on this frontend project and in the deployment's environment. A variable configured only on the backend project or only for Development is not available to the frontend build.
 
 ## Scripts
 

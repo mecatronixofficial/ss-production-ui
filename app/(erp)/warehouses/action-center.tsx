@@ -4,7 +4,7 @@ import { useState } from "react";
 import Link from "next/link";
 import * as Dialog from "@radix-ui/react-dialog";
 import { AlertTriangle, BellRing, ChevronRight, Factory, FileText, PartyPopper, ReceiptIndianRupee, ShoppingCart, X, type LucideIcon } from "lucide-react";
-import { dueText, isOverdue, remainingText, type PurchaseOrder } from "@/lib/purchases";
+import { remainingText, type PurchaseOrder } from "@/lib/purchases";
 import { PARTY_LABEL, type Sale } from "@/lib/sales";
 import { cn, formatDate, kg } from "@/lib/utils";
 import { quantity } from "@/lib/warehouses";
@@ -102,7 +102,6 @@ export function ActionCenter({
   onIssueAll?: () => void;
   actionsHref?: string;
 }) {
-  const overdue = purchaseOrders.filter(isOverdue);
   const pending = sales.length + purchaseOrders.length + fabric.length + (unbilled ?? 0) + negatives.length;
   // An action: a button when this page can do it, a link to the warehouse page otherwise.
   const act = (label: string, onClick?: () => void) =>
@@ -138,11 +137,11 @@ export function ActionCenter({
 
       {purchaseOrders.length > 0 && (
         <ActionCard
-          tone={overdue.length ? "late" : "po"}
+          tone="po"
           icon={ShoppingCart}
           title="Purchase orders to receive"
           count={purchaseOrders.length}
-          summary={overdue.length ? `${overdue.length} past the expected date · ${overdue[0].poNo}` : `Next: ${purchaseOrders[0].poNo} from ${purchaseOrders[0].supplier.name}`}
+          summary={`Next: ${purchaseOrders[0].poNo} from ${purchaseOrders[0].supplier.name}`}
         >
           {purchaseOrders.map((po) => (
             <li key={po.id} className="wh-action__row">
@@ -150,9 +149,6 @@ export function ActionCenter({
                 <p className="font-semibold">{po.poNo} · {po.supplier.name}</p>
                 <p className="truncate text-xs text-gray-600" title={remainingText(po)}>{remainingText(po)} to come</p>
               </div>
-              <span className={cn("shrink-0 text-xs", isOverdue(po) ? "font-semibold text-red-600" : "text-gray-500")}>
-                {po.expectedDate ? `${formatDate(po.expectedDate)} · ${dueText(po).toLowerCase()}` : "No date given"}
-              </span>
               {act("Receive", onReceivePo && (() => onReceivePo(po.id)))}
             </li>
           ))}
