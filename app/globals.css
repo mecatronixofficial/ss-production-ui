@@ -3737,8 +3737,10 @@ button.purchases-stat-tile { width: 100%; }
 .purchases-stat-tile.is-alert .purchases-stat-value { color: #dc2626; }
 /* Purchases: PO details window is wider than the default dialog */
 .users-dialog.purchases-dialog { max-width: 52rem; }
-/* Create purchase order: the item lines need room */
-.users-dialog.purchases-dialog.purchases-dialog--wide { max-width: 68rem; }
+/* Full-page purchase form: all item fields and details follow the page width. */
+.purchases-create-page { gap: 1rem; }
+.purchases-create-page label { min-width: 0; }
+.purchases-create-page .purchases-specs__grid label > span { font-size: .75rem; }
 /* Close-short window only needs a reason */
 .users-dialog.purchases-dialog.purchases-dialog--narrow { max-width: 30rem; }
 
@@ -7092,8 +7094,10 @@ button.purchases-stat-tile { width: 100%; }
     visibility: visible;
   }
 
-  /* Only the document prints, and it flows over as many pages as it needs (a fixed box would clip at one page). */
-  body:has([data-receipt-bill]) > *:not(:has([data-receipt-bill])) {
+  /* Only the document prints, and it flows over as many pages as it needs (a fixed box would clip at one page).
+     Radix portals a dialog's content straight into <body> (no wrapper), so the document itself is excluded here too:
+     `:has()` only looks at descendants, and without `:not([data-receipt-bill])` the document hid itself (a blank page). */
+  body:has([data-receipt-bill]) > *:not([data-receipt-bill]):not(:has([data-receipt-bill])) {
     display: none !important;
   }
 
@@ -7101,6 +7105,7 @@ button.purchases-stat-tile { width: 100%; }
   body {
     height: auto !important;
     overflow: visible !important;
+    background: #fff !important;
   }
 
   [data-receipt-bill] {
@@ -8017,6 +8022,8 @@ a.users-avatar {
 }
 .challan-copy-picker {
   display: inline-flex;
+  flex-wrap: wrap;
+  max-width: 100%;
   margin-right: auto;
   border: 1px solid #e2e8f0;
   border-radius: 12px;
@@ -9195,9 +9202,8 @@ a.ytree__code:hover { text-decoration: underline; }
 .sales-mix:hover { border-color: #c9d8d1; background: #fafcfb; }
 .sales-attention[aria-pressed="true"] { outline: 2px solid currentColor; outline-offset: 1px; }
 
-/* Purchases: a PO arriving soon, in the "Arriving next 7 days" card; late ones in red */
+/* Purchases: open purchase orders awaiting material. */
 .purchases-arriving { display: flex; align-items: center; gap: .75rem; border: 1px solid #edf1f0; border-left: 3px solid #4f7cac; border-radius: 12px; padding: .5rem .7rem; font-size: .82rem; }
-.purchases-arriving.is-late { border-left-color: #e11d48; background: #fff7f7; }
 
 /* Challans: quick date ranges above the register */
 .challans-presets { display: flex; flex-wrap: wrap; gap: .35rem; }
@@ -9371,3 +9377,53 @@ a.ytree__code:hover { text-decoration: underline; }
   .rpt-top__bar, .rpt-top__share { display: none; }
 }
 @media print { .rpt-top { break-inside: avoid; } }
+
+/* Shared phone and tablet layouts: contain wide tables without widening the page. */
+#main-content,
+#main-content > *,
+#main-content :where(form, fieldset),
+#main-content .grid > * {
+  min-width: 0;
+}
+#main-content > * { max-width: 100%; }
+#main-content :where(input, select, textarea) { max-width: 100%; }
+.users-dialog__body { min-height: 0; }
+.users-dialog { max-height: calc(100dvh - 2rem); }
+
+@media (min-width: 640px) {
+  .purchases-po-facts { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+}
+@media (max-width: 1023px) {
+  .login-page { grid-template-columns: minmax(0, 1fr); }
+  .login-main { min-width: 0; }
+}
+@media (max-width: 767px) {
+  /* A 16px field font prevents automatic zoom while typing on phones. */
+  .erp-input,
+  .login-input,
+  #main-content :where(input, select, textarea),
+  .users-dialog :where(input, select, textarea) { font-size: 16px; }
+  .users-dialog {
+    width: calc(100% - 1rem);
+    max-height: calc(100dvh - 1rem);
+    border-radius: 16px;
+  }
+  .users-dialog__head { gap: .5rem; padding: .75rem; }
+  .users-dialog__body { padding: .75rem .75rem 0; }
+  .users-dialog__foot { flex-wrap: wrap; margin-inline: -.75rem; padding: .75rem; }
+  .users-dialog__foot > :is(button, a) { flex: 1 1 auto; }
+  .dt-pagination > div { flex-wrap: wrap; max-width: 100%; }
+  .users-list-header > .flex { min-width: 0; }
+  .users-list-header > .flex:last-child { flex-wrap: wrap; width: 100%; }
+  .users-list-header > .flex:last-child > button { flex: 1 1 auto; }
+  .purchases-header-badge { flex-basis: 100%; }
+  .purchases-header-badge > :is(button, a) { flex: 1 1 auto; }
+  .purchases-create-page .purchases-page-header > div { min-width: 0; }
+  .purchases-create-page .purchases-page-header time { font-size: 10px; }
+}
+@media (pointer: coarse) {
+  #main-content button,
+  .users-dialog button,
+  .app-topbar button { min-height: 44px; }
+  .users-dialog__close { min-width: 44px; }
+}

@@ -51,7 +51,6 @@ export type JourneyBatch = {
     party: string | null;
     mill: string | null;
     startedAt: string | null;
-    expectedFinish: string | null;
     finishedAt: string | null;
     rolls: number | null;
     outputKg: number | null;
@@ -263,7 +262,6 @@ export function BatchJourney({ batch: b, itemCode, showPrices }: { batch: Journe
         <Step icon={Layers} tone="is-knitting" title={`Knitting · ${k.millType === "OWN" ? "own machines" : "other mill"}`} when={dates(k.startedAt, k.finishedAt)}>
           <div className="journey-facts">
             <Fact label="Party · mill" value={[k.party, k.mill].filter(Boolean).join(" · ") || null} />
-            <Fact label="Expected finish" value={!k.finishedAt && k.expectedFinish ? formatDate(k.expectedFinish) : null} />
             <Fact label="Grey fabric" value={k.outputKg !== null ? kg(k.outputKg) : null} />
             <Fact label="Change" value={change(b.yarn.kg, k.outputKg)} />
             <Fact label="Rolls" value={k.rolls} />

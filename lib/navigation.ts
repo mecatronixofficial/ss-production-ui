@@ -53,7 +53,7 @@ export const NAV_SECTIONS: NavSection[] = [
     items: [
       { href: "/production", label: "Production", description: "Admins create production work and move it through each process; managers start and complete knitting tasks.", icon: Factory, roles: MANAGERS },
       { href: "/sales", label: "Sales", description: "Sell to distributors or textiles: bill, vehicle, and the warehouse verifies and dispatches.", icon: ReceiptIndianRupee, roles: ADMIN },
-      { href: "/purchases", label: "Purchases", description: "Distributor POs, GRNs and received material posted into inventory.", icon: PackageCheck, roles: ADMIN },
+      { href: "/purchases", label: "Purchases", description: "Purchase orders from distributors and mills, with received material posted into inventory.", icon: PackageCheck, roles: ADMIN },
       { href: "/challans", label: "Challans", description: "Office copies of every delivery and received challan: search, filter by date and print anytime.", icon: FileText, roles: ADMIN },
     ],
   },
@@ -69,7 +69,7 @@ export const NAV_SECTIONS: NavSection[] = [
     title: "Masters",
     items: [
       { href: "/masters/distributors", label: "Distributors & Textiles", description: "Distributors you buy from and textiles you sell to, with what each owes or is owed.", icon: PackageCheck, roles: ADMIN },
-      { href: "/masters/mills", label: "Mill Details", description: "Outside knitting, dyeing and compacting mill details.", icon: Building2, roles: ADMIN },
+      { href: "/masters/mills", label: "Mill Details", description: "Mill contact details, addresses and billing information.", icon: Building2, roles: ADMIN },
       { href: "/masters/employees", label: "Employees", description: "Shop-floor staff, departments and shifts.", icon: UserCog, roles: ADMIN },
     ],
   },

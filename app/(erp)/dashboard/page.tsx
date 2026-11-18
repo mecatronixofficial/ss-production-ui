@@ -802,30 +802,26 @@ export default function Dashboard() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {p.batches.map((b) => {
-                      const late = !!b.dueDate && b.dueDate.slice(0, 10) < todayInput();
-                      return (
-                        <tr key={b.id} className="transition hover:bg-[#fafcfb]">
-                          <td className="px-5 py-3.5">
-                            <Link href={`/production?batch=${encodeURIComponent(b.flowNo)}`} className="customers-code">{b.flowNo}</Link>
-                            <p className="mt-1 text-[11px] text-gray-500">{b.fabric}{b.color ? ` · ${b.color}` : ""}</p>
-                          </td>
-                          <td className="px-5 py-3.5">
-                            <Badge tone={b.status === "AT_OFFICE" ? "success" : b.status === "PURCHASED" ? "default" : "info"}>{stageLabel(b.status)}</Badge>
-                            <p className="mt-1 max-w-[16rem] truncate text-[11px] text-gray-500" title={b.place}>{b.place}</p>
-                          </td>
-                          <td className="px-5 py-3.5"><StageSteps status={b.status} /></td>
-                          <td className="px-5 py-3.5">
-                            <p className="font-semibold text-gray-700">{kg(b.currentKg)}</p>
-                            <p className="mt-0.5 text-[11px] text-gray-400">from {kg(b.startedKg)}{b.lossPct > 0.05 ? ` · ${b.lossPct.toFixed(1)}% loss` : ""}</p>
-                          </td>
-                          <td className="px-5 py-3.5">
-                            <p className={cn("font-semibold", b.daysInStage > STUCK_DAYS ? "text-rose-600" : "text-gray-700")}>{days(b.daysInStage)}</p>
-                            {b.dueDate && <p className={cn("mt-0.5 text-[11px]", late ? "font-semibold text-rose-600" : "text-gray-400")}>Knitting due {formatDate(b.dueDate)}</p>}
-                          </td>
-                        </tr>
-                      );
-                    })}
+                    {p.batches.map((b) => (
+                      <tr key={b.id} className="transition hover:bg-[#fafcfb]">
+                        <td className="px-5 py-3.5">
+                          <Link href={`/production?batch=${encodeURIComponent(b.flowNo)}`} className="customers-code">{b.flowNo}</Link>
+                          <p className="mt-1 text-[11px] text-gray-500">{b.fabric}{b.color ? ` · ${b.color}` : ""}</p>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <Badge tone={b.status === "AT_OFFICE" ? "success" : b.status === "PURCHASED" ? "default" : "info"}>{stageLabel(b.status)}</Badge>
+                          <p className="mt-1 max-w-[16rem] truncate text-[11px] text-gray-500" title={b.place}>{b.place}</p>
+                        </td>
+                        <td className="px-5 py-3.5"><StageSteps status={b.status} /></td>
+                        <td className="px-5 py-3.5">
+                          <p className="font-semibold text-gray-700">{kg(b.currentKg)}</p>
+                          <p className="mt-0.5 text-[11px] text-gray-400">from {kg(b.startedKg)}{b.lossPct > 0.05 ? ` · ${b.lossPct.toFixed(1)}% loss` : ""}</p>
+                        </td>
+                        <td className="px-5 py-3.5">
+                          <p className={cn("font-semibold", b.daysInStage > STUCK_DAYS ? "text-rose-600" : "text-gray-700")}>{days(b.daysInStage)}</p>
+                        </td>
+                      </tr>
+                    ))}
                   </tbody>
                 </table>
                 {p.active > p.batches.length && (
@@ -927,10 +923,9 @@ export default function Dashboard() {
             <SectionTitle eyebrow="Incoming" title="Material on the way" action={d.isAdmin ? <MoreLink href="/purchases">Purchases</MoreLink> : undefined} />
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="grid grid-cols-3 gap-2 text-center">
+            <div className="grid grid-cols-2 gap-2 text-center">
               {([
                 ["Open POs", String(d.purchases.open), false],
-                ["Past due", String(d.purchases.overdue), d.purchases.overdue > 0],
                 ["Fabric to receive", String(d.awaitingFabric.count), false],
               ] as const).map(([label, value, bad]) => (
                 <div key={label} className={cn("rounded-xl px-2 py-2.5", bad ? "bg-rose-50" : "bg-gray-50")}>
@@ -947,14 +942,12 @@ export default function Dashboard() {
             ) : (
               <ul className="space-y-1.5">
                 {d.purchases.next.map((po) => {
-                  const late = !!po.expectedDate && po.expectedDate.slice(0, 10) < todayInput();
                   return (
                     <li key={po.id} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 px-3 py-2 text-xs">
                       <span className="min-w-0">
                         {d.isAdmin ? <Link href={`/purchases/${po.id}`} className="font-bold text-[#1b3c55] hover:underline">{po.poNo}</Link> : <b>{po.poNo}</b>}
                         <span className="block truncate text-[11px] text-gray-500">{po.supplier}</span>
                       </span>
-                      <span className={cn("shrink-0 text-[11px]", late ? "font-semibold text-rose-600" : "text-gray-500")}>{po.expectedDate ? `${late ? "Was due" : "Due"} ${formatDate(po.expectedDate)}` : "No date"}</span>
                     </li>
                   );
                 })}

@@ -2,32 +2,23 @@
 
 import Link from "next/link";
 import type { ColumnDef } from "@tanstack/react-table";
-import { Building2, CircleCheck, Download, Droplets, Factory, Layers, Shrink, type LucideIcon } from "lucide-react";
+import { Building2, CircleCheck, Download, Factory, type LucideIcon } from "lucide-react";
 import { api } from "@/lib/api";
 import { downloadCsv } from "@/lib/csv";
 import { GSTIN_PATTERN, INDIAN_STATES, stateForGstin } from "@/lib/india";
 import { todayInput } from "@/lib/utils";
 import { MasterCrud, type MasterField, type MasterProblem } from "@/components/master-crud";
-import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 
-type Mill = { id: string; code: string; name: string; services: string; contactPerson: string | null; mobile: string | null; alternateMobile: string | null; email: string | null; gst: string | null; address: string | null; city: string | null; state: string | null; paymentTerms: string | null; notes: string | null; active: boolean };
+type Mill = { id: string; code: string; name: string; contactPerson: string | null; mobile: string | null; alternateMobile: string | null; email: string | null; gst: string | null; address: string | null; city: string | null; state: string | null; paymentTerms: string | null; notes: string | null; active: boolean };
 
-// Keep in sync with SERVICES in backend/src/masters/dto/mill.dto.ts.
-const serviceOptions = ["KNITTING", "DYEING", "COMPACTING", "KNITTING,DYEING", "KNITTING,COMPACTING", "DYEING,COMPACTING", "KNITTING,DYEING,COMPACTING"] as const;
-const PROCESSES = ["KNITTING", "DYEING", "COMPACTING"] as const;
-const processTone: Record<string, BadgeTone> = { KNITTING: "info", DYEING: "warning", COMPACTING: "success" };
-const titleCase = (value: string) => value[0] + value.slice(1).toLowerCase();
-const processesOf = (services: string) => services.split(",").filter(Boolean);
-const labelServices = (services: string) => processesOf(services).map(titleCase).join(" + ");
-
-const blank = { code: "PC-", name: "", services: "KNITTING", contactPerson: "", mobile: "", alternateMobile: "", email: "", gst: "", address: "", city: "", state: "Tamil Nadu", paymentTerms: "", notes: "" };
+const blank = { code: "PC-", name: "", contactPerson: "", mobile: "", alternateMobile: "", email: "", gst: "", address: "", city: "", state: "Tamil Nadu", paymentTerms: "", notes: "" };
 type Form = typeof blank;
 
 const fields: MasterField<Form>[] = [
-  { key: "name", label: "Mill name", required: true, placeholder: "e.g. Sri Murugan Dyeing Mill", wide: true, maxLength: 160, section: "Mill" },
+  { key: "name", label: "Mill name", required: true, placeholder: "e.g. Sri Murugan Mill", wide: true, maxLength: 160, section: "Mill" },
   { key: "code", label: "Mill code", required: true, placeholder: "PC-001", hint: "Suggested", maxLength: 23, uppercase: true, section: "Mill" },
-  { key: "services", label: "Processes handled", type: "select", options: serviceOptions, optionLabel: labelServices, required: true, section: "Mill" },
   { key: "contactPerson", label: "Contact person", maxLength: 120, section: "Contact" },
   { key: "email", label: "Email", type: "email", maxLength: 160, section: "Contact" },
   { key: "mobile", label: "Mobile", type: "tel", placeholder: "98765 43210", maxLength: 30, section: "Contact" },
@@ -72,8 +63,8 @@ function validate(f: Form, { rows, editingId }: { rows: Mill[]; editingId: strin
 const exportMills = (rows: Mill[]) =>
   downloadCsv(
     `mills-${todayInput()}.csv`,
-    ["Code", "Mill", "Processes", "Contact person", "Mobile", "Alternate mobile", "Email", "GSTIN", "Address", "City", "State", "Payment terms", "Status"],
-    rows.map((r) => [r.code, r.name, labelServices(r.services), r.contactPerson, r.mobile, r.alternateMobile, r.email, r.gst, r.address, r.city, r.state, r.paymentTerms, r.active ? "Active" : "Inactive"]),
+    ["Code", "Mill", "Contact person", "Mobile", "Alternate mobile", "Email", "GSTIN", "Address", "City", "State", "Payment terms", "Status"],
+    rows.map((r) => [r.code, r.name, r.contactPerson, r.mobile, r.alternateMobile, r.email, r.gst, r.address, r.city, r.state, r.paymentTerms, r.active ? "Active" : "Inactive"]),
   );
 
 const text = (value: unknown) => (value == null ? "" : String(value));
@@ -81,7 +72,6 @@ const text = (value: unknown) => (value == null ? "" : String(value));
 const toForm = (row: Mill): Form => ({
   code: row.code,
   name: row.name,
-  services: row.services,
   contactPerson: text(row.contactPerson),
   mobile: text(row.mobile),
   alternateMobile: text(row.alternateMobile),
@@ -113,18 +103,6 @@ const columns: ColumnDef<Mill>[] = [
       <Link href={`/masters/mills/${row.original.id}`} className="font-semibold hover:underline">
         {row.original.name}
       </Link>
-    ),
-  },
-  {
-    header: "Processes",
-    id: "services",
-    accessorFn: (row) => labelServices(row.services),
-    cell: ({ row }) => (
-      <div className="flex flex-wrap gap-1">
-        {processesOf(row.original.services).map((process) => (
-          <Badge key={process} tone={processTone[process] ?? "default"}>{titleCase(process)}</Badge>
-        ))}
-      </div>
     ),
   },
   {
@@ -160,9 +138,6 @@ const loadDefaults = () => api<{ code: string }>("/masters/mills/next-code", { s
 const tileIcons: Record<string, { icon: LucideIcon; className: string }> = {
   total: { icon: Factory, className: "bg-[#1b3c55] text-[#f1cf7b]" },
   active: { icon: CircleCheck, className: "bg-emerald-600 text-white" },
-  KNITTING: { icon: Layers, className: "bg-blue-600 text-white" },
-  DYEING: { icon: Droplets, className: "bg-amber-500 text-white" },
-  COMPACTING: { icon: Shrink, className: "bg-teal-600 text-white" },
 };
 
 function Summary({ rows }: { rows: Mill[] }) {
@@ -170,15 +145,9 @@ function Summary({ rows }: { rows: Mill[] }) {
   const tiles = [
     { key: "total", label: "Mills", value: rows.length, hint: `${rows.length - active.length} inactive` },
     { key: "active", label: "Active", value: active.length, hint: "Selectable in Production" },
-    ...PROCESSES.map((process) => ({
-      key: process,
-      label: titleCase(process),
-      value: active.filter((row) => processesOf(row.services).includes(process)).length,
-      hint: "Active mills",
-    })),
   ];
   return (
-    <div className="mills-stats grid grid-cols-2 sm:grid-cols-3 xl:grid-cols-5">
+    <div className="mills-stats grid grid-cols-2">
       {tiles.map(({ key, label, value, hint }) => {
         const { icon: Icon, className } = tileIcons[key];
         return (
@@ -203,7 +172,7 @@ export default function MillsPage() {
     <MasterCrud<Mill, Form>
       prefix="mills"
       title="Mill Details"
-      description="Outside knitting, dyeing and compacting mills available in Production."
+      description="Manage mill contact details, addresses and billing information."
       entity="Mill"
       endpoint="/masters/mills"
       fields={fields}
@@ -213,10 +182,10 @@ export default function MillsPage() {
       describe={describe}
       loadDefaults={loadDefaults}
       summary={(rows) => <Summary rows={rows} />}
-      dialog={{ icon: Building2, caption: "Outside mill for knitting, dyeing or compacting. Active mills appear in Production." }}
+      dialog={{ icon: Building2, caption: "Add the mill's contact, address and billing details." }}
       activeField="active"
       activeHint="Inactive mills cannot be selected for new production work."
-      searchPlaceholder="Search mill, code, process, GSTIN or contact..."
+      searchPlaceholder="Search mill, code, GSTIN or contact..."
       validate={validate}
       headerActions={(rows) => (
         <Button variant="outline" disabled={rows.length === 0} onClick={() => exportMills(rows)} title="Download the mills shown">

@@ -15,7 +15,7 @@ type QuickAction = { href: string; label: string; caption: string; icon: LucideI
 const QUICK_ACTIONS: QuickAction[] = [
   { href: newHref("/production"), label: "Yarn Batch", caption: "New SS code from purchase or stock", icon: Factory },
   { href: "/sales/new", label: "Sale", caption: "Bill a distributor or textile", icon: ReceiptIndianRupee, roles: ADMIN_ROLES },
-  { href: newHref("/purchases"), label: "Purchase Order", caption: "Order yarn or material from a distributor", icon: ShoppingCart },
+  { href: newHref("/purchases"), label: "Purchase Order", caption: "Order yarn or material from a distributor or mill", icon: ShoppingCart },
   { href: newHref("/masters/machines"), label: "Machine", caption: "Register a machine", icon: Wrench },
   { href: newHref("/masters/distributors"), label: "Distributor", caption: "Add a distributor", icon: PackageCheck },
   { href: newHref("/warehouses"), label: "Stock Entry", caption: "Yarn or fabric in / out", icon: Warehouse, roles: GODOWN_EDIT_ROLES },

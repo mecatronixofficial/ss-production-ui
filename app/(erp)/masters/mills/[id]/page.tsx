@@ -1,25 +1,23 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { ArrowLeft, Building2, Clock3, Download, Factory, IndianRupee, Mail, MapPin, Pencil, Phone, Scale } from "lucide-react";
 import { downloadCsv } from "@/lib/csv";
 import { useApiQuery } from "@/lib/use-api-query";
 import { EDIT_PARAM } from "@/lib/use-new-param";
-import { cn, formatDate, humanize, kg, money, todayInput } from "@/lib/utils";
-import { Badge, type BadgeTone } from "@/components/ui/badge";
+import { cn, formatDate, kg, money, todayInput } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Loading } from "@/components/loading";
 import { ErrorState } from "@/components/page-state";
 
-type Process = "KNITTING" | "DYEING" | "COMPACTING";
 type Account = {
   mill: {
     id: string;
     code: string;
     name: string;
-    services: string;
     contactPerson: string | null;
     mobile: string | null;
     alternateMobile: string | null;
@@ -40,7 +38,7 @@ type Account = {
     yarnCount: string;
     fabricType: string | null;
     color: string | null;
-    process: Process;
+    process: string;
     startedAt: string | null;
     finishedAt: string | null;
     inKg: number | null;
@@ -49,11 +47,8 @@ type Account = {
   }>;
 };
 
-const PROCESSES: Process[] = ["KNITTING", "DYEING", "COMPACTING"];
-const processTone: Record<Process, BadgeTone> = { KNITTING: "info", DYEING: "warning", COMPACTING: "success" };
-const titleCase = (value: string) => value[0] + value.slice(1).toLowerCase();
-/** What goes in and comes out of each process, for the table headings. */
-const FLOW_LABEL: Record<Process, string> = { KNITTING: "Yarn → grey fabric", DYEING: "Grey → dyed fabric", COMPACTING: "Dyed → compacted fabric" };
+const jobStatus = (job: Pick<Account["jobs"][number], "startedAt" | "finishedAt">) =>
+  job.finishedAt ? "Completed" : job.startedAt ? "At the mill" : "Not started";
 
 function Section({ icon: Icon, title, caption, action, children }: { icon: typeof Factory; title: string; caption?: string; action?: React.ReactNode; children: React.ReactNode }) {
   return (
@@ -77,7 +72,6 @@ function Section({ icon: Icon, title, caption, action, children }: { icon: typeo
 export default function MillPage() {
   const { id } = useParams<{ id: string }>();
   const { data, error, reload } = useApiQuery<Account>(`/masters/mills/${id}/account`);
-  const [filter, setFilter] = useState<"ALL" | Process>("ALL");
 
   const summary = useMemo(() => {
     const jobs = data?.jobs ?? [];
@@ -91,7 +85,6 @@ export default function MillPage() {
       doneKg: done.reduce((sum, j) => sum + (j.outKg ?? 0), 0),
       charges: jobs.reduce((sum, j) => sum + j.expense, 0),
       lossPct: inKg > 0 ? ((inKg - outKg) / inKg) * 100 : null,
-      byProcess: PROCESSES.map((process) => ({ process, count: jobs.filter((j) => j.process === process).length })),
     };
   }, [data]);
 
@@ -101,18 +94,15 @@ export default function MillPage() {
   }
 
   const { mill: m, jobs } = data;
-  const processes = m.services.split(",").filter(Boolean) as Process[];
   const place = [m.city, m.state].filter(Boolean).join(", ");
-  const visible = filter === "ALL" ? jobs : jobs.filter((j) => j.process === filter);
   const phone = (value: string) => <a href={`tel:${value}`} className="text-[#1b3c55] hover:underline">{value}</a>;
 
   const exportJobs = () =>
     downloadCsv(
       `${m.code}-jobs-${todayInput()}.csv`,
-      ["Batch", "Process", "Fabric", "Colour", "Started", "Finished", "In KG", "Out KG", "Change KG", "Charges", "Batch status"],
-      visible.map((j) => [
+      ["Batch", "Fabric", "Colour", "Started", "Finished", "In KG", "Out KG", "Change KG", "Charges", "Job status"],
+      jobs.map((j) => [
         j.flowNo,
-        titleCase(j.process),
         j.fabricType ?? j.yarnCount,
         j.color ?? "",
         j.startedAt?.slice(0, 10) ?? "",
@@ -121,7 +111,7 @@ export default function MillPage() {
         j.outKg?.toFixed(3) ?? "",
         j.inKg !== null && j.outKg !== null ? (j.outKg - j.inKg).toFixed(3) : "",
         j.expense.toFixed(2),
-        humanize(j.status),
+        jobStatus(j),
       ]),
     );
 
@@ -147,9 +137,6 @@ export default function MillPage() {
             <span className="font-mono text-sm font-semibold text-gray-500">{m.code}</span>
             <Badge tone={m.active ? "success" : "warning"}>{m.active ? "Active" : "Inactive"}</Badge>
           </h2>
-          <div className="mt-1 flex flex-wrap gap-1">
-            {processes.map((p) => <Badge key={p} tone={processTone[p] ?? "default"}>{titleCase(p)}</Badge>)}
-          </div>
           <p className="mt-1 flex flex-wrap gap-x-4 gap-y-1 text-xs text-gray-500">
             {place && <span className="inline-flex items-center gap-1"><MapPin size={12} /> {place}</span>}
             {m.mobile && <span className="inline-flex items-center gap-1"><Phone size={12} /> {m.mobile}</span>}
@@ -163,7 +150,7 @@ export default function MillPage() {
 
       <dl className="customer-account__figures mill-figures">
         {[
-          { label: "Batches", value: String(summary.batches), note: summary.byProcess.filter((p) => p.count).map((p) => `${p.count} ${titleCase(p.process).toLowerCase()}`).join(" · ") || "No jobs yet", icon: Factory },
+          { label: "Batches", value: String(summary.batches), note: jobs.length ? `${jobs.length} recorded job${jobs.length === 1 ? "" : "s"}` : "No jobs yet", icon: Factory },
           { label: "At the mill now", value: String(summary.atMill.length), note: summary.atMill.length ? summary.atMill.slice(0, 3).map((j) => j.flowNo).join(", ") : "Nothing in progress", icon: Clock3 },
           { label: "Fabric returned", value: kg(summary.doneKg), note: summary.lossPct === null ? "From finished jobs" : `${summary.lossPct >= 0 ? "Loss" : "Gain"} ${Math.abs(summary.lossPct).toFixed(1)}% on weight`, icon: Scale },
           { label: "Charges", value: money(summary.charges), note: summary.doneKg > 0 ? `${money(summary.charges / summary.doneKg)} per KG returned` : "Recorded on batches", icon: IndianRupee },
@@ -211,23 +198,16 @@ export default function MillPage() {
       <Section
         icon={Factory}
         title={`Production jobs (${jobs.length})`}
-        caption="Batches whose knitting, dyeing or compacting was done here, newest first. Open a batch to see its full journey."
+        caption="Work recorded for this mill, newest first. Open a batch to see its details."
         action={
           <div className="flex flex-wrap items-center gap-2">
-            <div className="purchases-filters" role="tablist" aria-label="Filter by process">
-              {(["ALL", ...PROCESSES] as const).map((value) => (
-                <button key={value} type="button" role="tab" aria-selected={filter === value} className={cn(filter === value && "is-active")} onClick={() => setFilter(value)}>
-                  {value === "ALL" ? "All" : titleCase(value)} <span>{value === "ALL" ? jobs.length : jobs.filter((j) => j.process === value).length}</span>
-                </button>
-              ))}
-            </div>
-            <Button size="sm" variant="outline" disabled={visible.length === 0} onClick={exportJobs}><Download size={14} /> Export CSV</Button>
+            <Button size="sm" variant="outline" disabled={jobs.length === 0} onClick={exportJobs}><Download size={14} /> Export CSV</Button>
           </div>
         }
       >
-        {visible.length === 0 ? (
+        {jobs.length === 0 ? (
           <div className="purchases-empty">
-            {jobs.length ? "No jobs for this process." : `No production batch names ${m.name} yet. It appears here once a batch picks this mill on the Production page.`}
+            {`No production batch names ${m.name} yet. It appears here once a batch picks this mill on the Production page.`}
           </div>
         ) : (
           <div className="purchases-line-table overflow-x-auto rounded-xl border">
@@ -235,27 +215,22 @@ export default function MillPage() {
               <thead>
                 <tr>
                   <th className="px-3 py-2">Batch</th>
-                  <th className="px-3 py-2">Process</th>
                   <th className="px-3 py-2">Dates</th>
                   <th className="px-3 py-2 text-right">Sent</th>
                   <th className="px-3 py-2 text-right">Returned</th>
                   <th className="px-3 py-2 text-right">Change</th>
                   <th className="px-3 py-2 text-right">Charges</th>
-                  <th className="px-3 py-2">Batch now</th>
+                  <th className="px-3 py-2">Job status</th>
                 </tr>
               </thead>
               <tbody>
-                {visible.map((j) => {
+                {jobs.map((j) => {
                   const change = j.inKg !== null && j.outKg !== null ? j.outKg - j.inKg : null;
                   return (
                     <tr key={`${j.batchId}-${j.process}`}>
                       <td className="px-3 py-2">
                         <Link href={`/production?batch=${encodeURIComponent(j.flowNo)}`} className="customers-code">{j.flowNo}</Link>
                         <span className="mt-0.5 block text-xs text-gray-500">{[j.fabricType ?? j.yarnCount, j.color].filter(Boolean).join(" · ")}</span>
-                      </td>
-                      <td className="px-3 py-2">
-                        <Badge tone={processTone[j.process]}>{titleCase(j.process)}</Badge>
-                        <span className="mt-0.5 block text-[11px] text-gray-400">{FLOW_LABEL[j.process]}</span>
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 text-xs text-gray-600">
                         {formatDate(j.startedAt)}
@@ -269,18 +244,18 @@ export default function MillPage() {
                         {change === null ? "—" : `${change >= 0 ? "+" : "−"}${kg(Math.abs(change))}`}
                       </td>
                       <td className="whitespace-nowrap px-3 py-2 text-right tabular-nums">{j.expense ? money(j.expense) : "—"}</td>
-                      <td className="px-3 py-2"><Badge tone={j.status === "DELIVERED" ? "success" : "default"}>{humanize(j.status)}</Badge></td>
+                      <td className="px-3 py-2"><Badge tone={j.finishedAt ? "success" : j.startedAt ? "info" : "default"}>{jobStatus(j)}</Badge></td>
                     </tr>
                   );
                 })}
               </tbody>
               <tfoot>
                 <tr>
-                  <td colSpan={3} className="px-3 py-2.5 text-right font-bold">Total</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{kg(visible.reduce((sum, j) => sum + (j.inKg ?? 0), 0))}</td>
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-bold tabular-nums">{kg(visible.reduce((sum, j) => sum + (j.outKg ?? 0), 0))}</td>
+                  <td colSpan={2} className="px-3 py-2.5 text-right font-bold">Total</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right tabular-nums">{kg(jobs.reduce((sum, j) => sum + (j.inKg ?? 0), 0))}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-bold tabular-nums">{kg(jobs.reduce((sum, j) => sum + (j.outKg ?? 0), 0))}</td>
                   <td />
-                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-bold tabular-nums">{money(visible.reduce((sum, j) => sum + j.expense, 0))}</td>
+                  <td className="whitespace-nowrap px-3 py-2.5 text-right font-bold tabular-nums">{money(jobs.reduce((sum, j) => sum + j.expense, 0))}</td>
                   <td />
                 </tr>
               </tfoot>
