@@ -7,6 +7,7 @@ import { api } from "@/lib/api";
 import {
   categoryFor,
   KG_CATEGORIES,
+  purchaseTotals,
   qty,
   receivedQuantity,
   remainingQuantity,
@@ -45,6 +46,39 @@ export type ReceiveResult = {
 };
 
 const decimals = (value: string) => (value.split(".")[1] ?? "").length;
+
+/** The PO detail that holds a line's packages: yarn bags, fabric rolls, other material packs. */
+const PACK_SPEC: Record<string, string> = { bags: "Bags", rolls: "Rolls", packages: "Packs" };
+
+/** The ordered details to check at receipt: everything but the packages, which are entered in their own box. */
+const PACK_LABELS = new Set(["Bags", "Rolls", "Packs", "KG per bag"]);
+const orderChecks = (item: PurchaseOrder["items"][number]) => (item.specs ?? []).filter((s) => !PACK_LABELS.has(s.label));
+
+/**
+ * The rolls / bags a received quantity comes to, from the purchase order, until typed over:
+ * the whole order at once → the bags as ordered ("30+9"); otherwise received ÷ KG per bag, or the ordered bags in
+ * proportion to the quantity. Empty when the PO says nothing about them.
+ */
+export function autoPackages(item: PurchaseOrder["items"][number], unit: string, received: number) {
+  if (!(received > 0)) return "";
+  const spec = (label: string) => item.specs?.find((s) => s.label === label)?.value?.trim() ?? "";
+  const written = spec(PACK_SPEC[unit] ?? "Packs");
+  const orderedPacks = packageTotal(written);
+  const ordered = Number(item.quantity);
+  // Everything ordered arrives on this receipt: the bags exactly as ordered.
+  if (orderedPacks !== null && receivedQuantity(item) <= 1e-9 && Math.abs(received - ordered) <= 1e-6) return written.replace(/\s+/g, "");
+  const perPack = Number(spec("KG per bag"));
+  if (perPack > 0 && isWeightUnit(item.unit)) {
+    const kgReceived = item.unit.toUpperCase() === "G" ? received / 1000 : received;
+    const count = Math.round(kgReceived / perPack);
+    if (count > 0) return String(count);
+  }
+  if (orderedPacks !== null && ordered > 0) {
+    const count = Math.round((orderedPacks * received) / ordered);
+    if (count > 0) return String(count);
+  }
+  return "";
+}
 /** Grams are whole numbers (they are kept in stock as KG to 3 decimals); other units take 3 decimals. */
 const maxDecimals = (unit: string) => (unit.toUpperCase() === "G" ? 0 : 3);
 
@@ -55,8 +89,9 @@ export const receiptSummary = (result: ReceiveResult) => {
 };
 
 /**
- * Goods receipt (GRN) for one open purchase order: enter what arrived today, with the distributor's challan and the
- * vehicle; the rest stays open. Each line is checked: the quantity on their DC against what the godown weighed or
+ * Goods receipt (GRN) for one open purchase order: enter what arrived; the rest
+ * stays open. It asks for what the received note prints (no vehicle or supplier lot), and its value is the note's
+ * total with GST. Each line is checked: the quantity on their DC against what the godown weighed or
  * counted (matches, short or excess), its bags / rolls (as written, e.g. 30+9) and its count or shade. Posting it
  * updates stock, tells the office and godown, and gives a received challan that prints the checks.
  * Used on the Purchases page and on a warehouse's page, where `fixedWarehouse` receives straight into it.
@@ -92,10 +127,11 @@ export function ReceiveDialog({
   const [receivedDate, setReceivedDate] = useState(() => entryDate(firstPo?.orderDate));
   const [warehouseId, setWarehouseId] = useState(defaultWarehouse(firstPo));
   const [category, setCategory] = useState<StockCategory>(categoryFor(firstPo?.supplier.materialCategory));
-  const [lotNo, setLotNo] = useState("");
-  const [challanNo, setChallanNo] = useState("");
-  const [vehicleNo, setVehicleNo] = useState("");
   const [notes, setNotes] = useState("");
+  /** Lines whose rolls / bags were typed over: they keep what was typed instead of following the quantity. */
+  const [packsTyped, setPacksTyped] = useState<Record<string, boolean>>({});
+  /** After a post without them: outline the lines received without rolls / bags. */
+  const [showMissing, setShowMissing] = useState(false);
   const [quantities, setQuantities] = useState<Record<string, string>>({});
   const [checks, setChecks] = useState<Record<string, LineCheck>>({});
   const checkOf = (id: string) => checks[id] ?? NO_CHECK;
@@ -104,17 +140,17 @@ export function ReceiveDialog({
   const setDetail = (id: string, label: string, changes: Partial<DetailCheck>) =>
     setDetails((current) => ({ ...current, [id]: { ...current[id], [label]: { ...(current[id]?.[label] ?? UNCHECKED), ...changes } } }));
   const allAsOrdered = (item: PurchaseOrder["items"][number]) =>
-    setDetails((current) => ({ ...current, [item.id]: Object.fromEntries((item.specs ?? []).map((s) => [s.label, { ok: true, received: "" }])) }));
+    setDetails((current) => ({ ...current, [item.id]: Object.fromEntries(orderChecks(item).map((s) => [s.label, { ok: true, received: "" }])) }));
   /** A line being received now with ordered details still to check, or marked different without saying what came. */
   const unchecked = (item: PurchaseOrder["items"][number]) =>
-    Number(quantities[item.id] || 0) > 0 && (item.specs ?? []).some((s) => detailOf(item.id, s.label).ok === null || (detailOf(item.id, s.label).ok === false && !detailOf(item.id, s.label).received.trim()));
+    Number(quantities[item.id] || 0) > 0 && orderChecks(item).some((s) => detailOf(item.id, s.label).ok === null || (detailOf(item.id, s.label).ok === false && !detailOf(item.id, s.label).received.trim()));
   const setCheck = (id: string, changes: Partial<LineCheck>) => setChecks((current) => ({ ...current, [id]: { ...(current[id] ?? NO_CHECK), ...changes } }));
   const { message, run, reject, busy } = useApiAction();
 
   const po = purchaseOrders.find((row) => row.id === purchaseOrderId);
   const stock = warehouseSummary?.find((w) => w.id === warehouseId);
   /** Lines still to receive that were ordered with details: each gets a card to check them on. */
-  const checkable = (po?.items ?? []).filter((item) => (item.specs?.length ?? 0) > 0 && remainingQuantity(item) > 0);
+  const checkable = (po?.items ?? []).filter((item) => orderChecks(item).length > 0 && remainingQuantity(item) > 0);
   const [flashed, setFlashed] = useState<string | null>(null);
   const showCheck = (id: string) => {
     document.getElementById(`grn-check-${id}`)?.scrollIntoView({ behavior: "smooth", block: "center" });
@@ -123,21 +159,25 @@ export function ReceiveDialog({
   };
   // Warehouse staff get POs without rates, so there is no value to show them.
   const pricesShown = !!po?.items.every((item) => item.rate !== null);
-  const receiptValue = po ? po.items.reduce((sum, item) => sum + Number(quantities[item.id] || 0) * Number(item.rate ?? 0), 0) : 0;
+  // The same as the received note: each line's taxable value and GST rounded to paise, then the total with GST.
+  const receiptValue = purchaseTotals((po?.items ?? []).map((item) => ({ quantity: quantities[item.id] || 0, rate: item.rate, gstRate: item.gstRate })));
   // Lines are received as the material they were ordered as; only older lines without one need a category here.
   const needsCategory = !!po?.items.some((item) => !item.category);
   const lineCategory = (item: PurchaseOrder["items"][number]) => item.category ?? category;
   const nonKgLines = po ? po.items.filter((item) => KG_CATEGORIES.includes(lineCategory(item)) && !isWeightUnit(item.unit)) : [];
+  /** The rolls / bags worked out from the PO for what is received now. */
+  const autoPacksOf = (item: PurchaseOrder["items"][number]) => autoPackages(item, packageUnitOf(lineCategory(item)), Number(quantities[item.id] || 0));
+  /** What the line posts as its rolls / bags: as typed, or worked out from the PO until typed over. */
+  const packagesOf = (item: PurchaseOrder["items"][number]) => (packsTyped[item.id] ? checkOf(item.id).packages : autoPacksOf(item));
 
   const choose = (id: string) => {
     const next = purchaseOrders.find((row) => row.id === id);
     setPurchaseOrderId(id);
     setQuantities({});
     setChecks({});
+    setPacksTyped({});
+    setShowMissing(false);
     setDetails({});
-    setLotNo("");
-    setChallanNo("");
-    setVehicleNo("");
     setNotes("");
     if (next) {
       setReceivedDate(entryDate(next.orderDate));
@@ -158,7 +198,20 @@ export function ReceiveDialog({
         `${invalid.itemName}: enter a quantity of 0 or more, ${maxDecimals(invalid.unit) ? "with up to 3 decimals" : "in whole grams"}.`,
         "Check receipt",
       );
-    const badPackages = po.items.find((item) => checkOf(item.id).packages.trim() && !PACKAGES_PATTERN.test(checkOf(item.id).packages));
+    // Every line received needs its rolls / bags: the received note prints them as "No. of Roll / Bag".
+    const noPackages = po.items.find((item) => Number(quantities[item.id] || 0) > 0 && !packagesOf(item).trim());
+    if (noPackages) {
+      setShowMissing(true);
+      // Take the user straight to the empty box (the table can scroll sideways, hiding the column).
+      const box = document.getElementById(`grn-packs-${noPackages.id}`) as HTMLInputElement | null;
+      box?.scrollIntoView({ behavior: "smooth", block: "center", inline: "center" });
+      box?.focus({ preventScroll: true });
+      return reject(
+        `Count ${noPackages.itemName}: type the number of ${packageUnitOf(lineCategory(noPackages))} received in the highlighted "No. of Roll / Bag" box (e.g. 22 or 30+9), then post again.`,
+        "Enter rolls / bags",
+      );
+    }
+    const badPackages = po.items.find((item) => Number(quantities[item.id] || 0) > 0 && packagesOf(item).trim() && !PACKAGES_PATTERN.test(packagesOf(item)));
     if (badPackages) return reject(`${badPackages.itemName}: write ${packageUnitOf(lineCategory(badPackages))} as numbers, e.g. 12 or 30+9.`, "Check receipt");
     const badDc = po.items.find((item) => checkOf(item.id).dc.trim() && !(Number(checkOf(item.id).dc) > 0));
     if (badDc) return reject(`${badDc.itemName}: the DC quantity must be a number above 0.`, "Check receipt");
@@ -176,10 +229,10 @@ export function ReceiveDialog({
           purchaseOrderItemId: item.id,
           quantity: Math.round(Number(quantities[item.id] || 0) * 1000) / 1000,
           dcQuantity: check.dc.trim() ? Math.round(Number(check.dc) * 1000) / 1000 : undefined,
-          packages: check.packages.replace(/\s+/g, "") || undefined,
+          packages: packagesOf(item).replace(/\s+/g, "") || undefined,
           details: check.details.trim() || undefined,
-          checks: item.specs?.length
-            ? item.specs.map((s) => ({ label: s.label, ordered: s.value, ok: detailOf(item.id, s.label).ok === true, received: detailOf(item.id, s.label).received.trim() || undefined }))
+          checks: orderChecks(item).length
+            ? orderChecks(item).map((s) => ({ label: s.label, ordered: s.value, ok: detailOf(item.id, s.label).ok === true, received: detailOf(item.id, s.label).received.trim() || undefined }))
             : undefined,
         };
       })
@@ -193,9 +246,6 @@ export function ReceiveDialog({
           warehouseId,
           receivedDate,
           category: needsCategory ? category : undefined,
-          lotNo: lotNo.trim() || undefined,
-          challanNo: challanNo.trim() || undefined,
-          vehicleNo: vehicleNo.trim().toUpperCase() || undefined,
           notes: notes.trim() || undefined,
           items,
         }),
@@ -276,18 +326,6 @@ export function ReceiveDialog({
                   <span className="mt-1 block text-[11px] text-gray-500">For items ordered without a material.</span>
                 </label>
               )}
-              <label>
-                <span className="erp-label">Supplier challan / invoice no</span>
-                <Input value={challanNo} maxLength={60} onChange={(event) => setChallanNo(event.target.value)} placeholder="As written on their challan" />
-              </label>
-              <label>
-                <span className="erp-label">Vehicle no</span>
-                <Input value={vehicleNo} maxLength={30} className="uppercase" onChange={(event) => setVehicleNo(event.target.value)} placeholder="TN 39 AB 1234" />
-              </label>
-              <label>
-                <span className="erp-label">Supplier lot / batch</span>
-                <Input value={lotNo} maxLength={60} onChange={(event) => setLotNo(event.target.value)} placeholder="Optional lot number" />
-              </label>
               <label className="sm:col-span-2">
                 <span className="erp-label">Remarks</span>
                 <Input value={notes} maxLength={500} onChange={(event) => setNotes(event.target.value)} placeholder="Optional, e.g. 2 bags torn, weight checked" />
@@ -316,7 +354,7 @@ export function ReceiveDialog({
                         <th className="px-3 py-2.5">Still to come</th>
                         <th className="px-3 py-2.5">On their DC</th>
                         <th className="px-3 py-2.5">Received here *</th>
-                        <th className="px-3 py-2.5">Bags / rolls</th>
+                        <th className="px-3 py-2.5">No. of Roll / Bag *</th>
                         <th className="px-3 py-2.5">Check</th>
                       </tr>
                     </thead>
@@ -328,10 +366,14 @@ export function ReceiveDialog({
                         const badNumber = value !== "" && (Number(value) < 0 || decimals(value) > maxDecimals(item.unit));
                         const check = checkOf(item.id);
                         const packUnit = packageUnitOf(lineCategory(item));
-                        const packs = packageTotal(check.packages);
-                        const badPacks = !!check.packages.trim() && packs === null;
+                        const packText = packagesOf(item);
+                        const autoPacks = autoPacksOf(item);
+                        const typedOver = !!packsTyped[item.id];
+                        const packs = packageTotal(packText);
+                        const badPacks = !!packText.trim() && packs === null;
+                        const missingPacks = showMissing && Number(value || 0) > 0 && !packText.trim();
                         const here = value === "" ? null : Number(value);
-                        const ordered = item.specs ?? [];
+                        const ordered = orderChecks(item);
                         const checkedCount = ordered.filter((s) => detailOf(item.id, s.label).ok !== null).length;
                         const differs = ordered.filter((s) => detailOf(item.id, s.label).ok === false).length;
                         return (
@@ -414,15 +456,33 @@ export function ReceiveDialog({
                             </td>
                             <td className="px-3 py-1.5">
                               <Input
-                                className={cn("max-w-28", badPacks && "border-red-400")}
+                                className={cn("max-w-28", (badPacks || missingPacks) && "border-red-400")}
+                                aria-required={Number(value || 0) > 0}
+                                aria-invalid={badPacks || missingPacks}
                                 disabled={remaining <= 0}
                                 placeholder={`${packUnit}, e.g. 30+9`}
-                                value={check.packages}
-                                onChange={(event) => setCheck(item.id, { packages: event.target.value.replace(/[^\d+\s]/g, "") })}
+                                value={packText}
+                                onChange={(event) => {
+                                  setCheck(item.id, { packages: event.target.value.replace(/[^\d+\s]/g, "") });
+                                  setPacksTyped((current) => ({ ...current, [item.id]: true }));
+                                }}
                                 aria-label={`${packUnit}, ${item.itemName}`}
+                                id={`grn-packs-${item.id}`}
                               />
-                              {packs !== null && check.packages.includes("+") && <p className="mt-0.5 text-[11px] text-gray-500">= {packs} {packUnit}</p>}
+                              {packs !== null && packText.includes("+") && <p className="mt-0.5 text-[11px] text-gray-500">= {packs} {packUnit}</p>}
+                              {/* Where the number came from, and a way back to it after typing over. */}
+                              {!typedOver && autoPacks && <p className="mt-0.5 text-[11px] text-emerald-700">Auto from PO · edit if different</p>}
+                              {typedOver && autoPacks && packText !== autoPacks && (
+                                <button
+                                  type="button"
+                                  className="mt-0.5 block text-[11px] font-semibold text-[#1b3c55] underline"
+                                  onClick={() => setPacksTyped((current) => ({ ...current, [item.id]: false }))}
+                                >
+                                  Use PO: {autoPacks}
+                                </button>
+                              )}
                               {badPacks && <p className="mt-0.5 text-[11px] text-red-600">Numbers, e.g. 30+9</p>}
+                              {missingPacks && <p className="mt-0.5 text-[11px] text-red-600">Required: printed on the received note</p>}
                             </td>
                             <td className="px-3 py-2">
                               {check.dc && here !== null ? (
@@ -447,7 +507,7 @@ export function ReceiveDialog({
                       <button type="button" className="grn-check__all" onClick={() => checkable.forEach(allAsOrdered)}>Everything as ordered</button>
                     </div>
                     {checkable.map((item) => {
-                      const ordered = item.specs ?? [];
+                      const ordered = orderChecks(item);
                       const checkedCount = ordered.filter((s) => detailOf(item.id, s.label).ok !== null).length;
                       const differs = ordered.filter((s) => detailOf(item.id, s.label).ok === false).length;
                       return (
@@ -509,11 +569,16 @@ export function ReceiveDialog({
             <div className="users-dialog__foot items-center">
               {po && (
                 <div className="mr-auto text-sm">
-                  {pricesShown ? <>Receipt value <strong>{money(receiptValue)}</strong></> : <span className="text-xs text-gray-500">A received challan is made for the office when you post.</span>}
+                  {pricesShown ? (
+                    <>
+                      Total with GST <strong>{money(receiptValue.totalAmount)}</strong>
+                      <span className="ml-1.5 text-[11px] text-gray-500">{money(receiptValue.subtotal)} + GST {money(receiptValue.gstAmount)}</span>
+                    </>
+                  ) : <span className="text-xs text-gray-500">A received challan is made for the office when you post.</span>}
                   {(() => {
-                    const packed = po.items.reduce((sum, item) => sum + (packageTotal(checkOf(item.id).packages) ?? 0), 0);
+                    const packed = po.items.reduce((sum, item) => sum + (Number(quantities[item.id] || 0) > 0 ? (packageTotal(packagesOf(item)) ?? 0) : 0), 0);
                     const short = po.items.filter((item) => checkOf(item.id).dc && quantities[item.id] && Number(quantities[item.id]) < Number(checkOf(item.id).dc) - 0.0005).length;
-                    const differing = po.items.reduce((sum, item) => sum + (item.specs ?? []).filter((s) => detailOf(item.id, s.label).ok === false).length, 0);
+                    const differing = po.items.reduce((sum, item) => sum + orderChecks(item).filter((s) => detailOf(item.id, s.label).ok === false).length, 0);
                     const toCheck = po.items.filter(unchecked).length;
                     const notes = [
                       packed ? <span key="p">{packed} bags / rolls</span> : null,

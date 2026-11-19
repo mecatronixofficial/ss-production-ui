@@ -88,6 +88,14 @@ type DeliveryRow = {
   total: number;
 };
 
+/**
+ * One row of the Delivery challans register: a sale dispatched to a party, or a production delivery challan (fabric
+ * sent from knitting / dyeing / compacting to the next mill, a warehouse or a party). Both are delivery challans.
+ */
+type DeliveryAny =
+  | { key: string; source: "sale"; date: string; vehicleNo: string | null; sale: DeliveryRow }
+  | { key: string; source: "production"; date: string; vehicleNo: string | null; pdc: ProcessRow };
+
 /** A row of `/procurement/receipts`. */
 type ReceivedRow = {
   id: string;
@@ -187,7 +195,8 @@ function Challans() {
   const keep = { persist: from || to || kind ? undefined : user?.id };
   const delivery = useApiQuery<DeliveryRow[]>(tab === "delivery" ? pathOf("delivery") : null, keep);
   const received = useApiQuery<ReceivedRow[]>(tab === "received" ? pathOf("received") : null, keep);
-  const process = useApiQuery<ProcessRow[]>(tab === "process" ? pathOf("process") : null, keep);
+  // Production delivery challans are delivery challans too: the Delivery tab lists them with the sales.
+  const process = useApiQuery<ProcessRow[]>(tab === "process" || tab === "delivery" ? pathOf("process") : null, keep);
   const warehouse = useApiQuery<{ unbilled: number; bills: WarehouseRow[] }>(tab === "warehouse" ? pathOf("warehouse") : null, keep);
 
   const setTab = (value: Tab) => {
@@ -213,46 +222,97 @@ function Challans() {
     }
   };
 
-  const deliveryColumns = useMemo<ColumnDef<DeliveryRow>[]>(
+  const deliveryColumns = useMemo<ColumnDef<DeliveryAny>[]>(
     () => [
       {
         header: "Delivery challan",
         id: "dc",
-        accessorFn: (r) => `${r.challanNo} ${r.dispatchedAt}`,
-        cell: ({ row }) => (
-          <div>
-            <button type="button" className="font-mono font-semibold text-[#1b3c55] hover:underline" onClick={() => setOpenDelivery(row.original.id)}>{row.original.challanNo}</button>
-            <p className="text-xs text-gray-400">{formatDateTime(row.original.dispatchedAt)}</p>
-          </div>
-        ),
+        accessorFn: (r) => `${r.source === "sale" ? r.sale.challanNo : r.pdc.challanNo} ${r.date}`,
+        cell: ({ row }) => {
+          const r = row.original;
+          const open = () => (r.source === "sale" ? setOpenDelivery(r.sale.id) : setOpenProcess(r.pdc.id));
+          return (
+            <div>
+              <button type="button" className="font-mono font-semibold text-[#1b3c55] hover:underline" onClick={open}>{r.source === "sale" ? r.sale.challanNo : r.pdc.challanNo}</button>
+              <p className="text-xs text-gray-400">{r.source === "sale" ? formatDateTime(r.date) : formatDate(r.date)}</p>
+              <span className="mt-0.5 flex flex-wrap gap-1">
+                <Badge tone={r.source === "sale" ? "info" : "success"}>{r.source === "sale" ? "Sale" : "Production"}</Badge>
+                {r.source === "production" && r.pdc.cancelledAt && <Badge tone="default">Cancelled</Badge>}
+              </span>
+            </div>
+          );
+        },
       },
       {
-        header: "Bill / consignee",
+        header: "Bill or batch / delivered to",
         id: "party",
-        accessorFn: (r) => `${r.saleNo} ${r.partyName} ${PARTY_LABEL[r.partyType]}`,
-        cell: ({ row }) => (
-          <div className="max-w-48">
-            <Link href={`/sales/${row.original.id}`} className="customers-code">{row.original.saleNo}</Link>
-            <p className="truncate text-sm font-medium" title={row.original.partyName}>{row.original.partyName}</p>
-            <p className="text-xs text-gray-400">{PARTY_LABEL[row.original.partyType]}</p>
-          </div>
-        ),
+        accessorFn: (r) => (r.source === "sale" ? `${r.sale.saleNo} ${r.sale.partyName} ${PARTY_LABEL[r.sale.partyType]}` : `${r.pdc.flow.flowNo} ${r.pdc.process} ${r.pdc.toName} ${TO_LABEL[r.pdc.toKind]}`),
+        cell: ({ row }) => {
+          const r = row.original;
+          return r.source === "sale" ? (
+            <div className="max-w-52">
+              <Link href={`/sales/${r.sale.id}`} className="customers-code">{r.sale.saleNo}</Link>
+              <p className="truncate text-sm font-medium" title={r.sale.partyName}>{r.sale.partyName}</p>
+              <p className="text-xs text-gray-400">{PARTY_LABEL[r.sale.partyType]}</p>
+            </div>
+          ) : (
+            <div className="max-w-52">
+              <Link href={`/production?batch=${encodeURIComponent(r.pdc.flow.flowNo)}`} className="customers-code">{r.pdc.flow.flowNo}</Link>
+              <p className="truncate text-sm font-medium" title={r.pdc.toName}>{r.pdc.toName}</p>
+              <p className="text-xs text-gray-400">{TO_LABEL[r.pdc.toKind]} · {r.pdc.process}</p>
+            </div>
+          );
+        },
       },
-      { header: "From", id: "warehouse", accessorFn: (r) => r.warehouse.code, cell: ({ row }) => <span className="whitespace-nowrap font-semibold">{row.original.warehouse.code}</span> },
+      {
+        header: "From",
+        id: "warehouse",
+        accessorFn: (r) => (r.source === "sale" ? r.sale.warehouse.code : r.pdc.fromName),
+        cell: ({ row }) => {
+          const from = row.original.source === "sale" ? row.original.sale.warehouse.code : row.original.pdc.fromName;
+          return <span className="block max-w-40 truncate font-semibold" title={from}>{from}</span>;
+        },
+      },
       {
         header: "Vehicle / transport",
         id: "vehicle",
-        accessorFn: (r) => `${r.vehicleNo ?? ""} ${r.driverName ?? ""} ${r.transporter ?? ""} ${r.lrNo ?? ""}`,
-        cell: ({ row }) => (
-          <div className="text-xs">
-            <p className="font-mono font-semibold text-gray-700">{row.original.vehicleNo || "—"}</p>
-            <p className="text-gray-500">{[row.original.driverName, row.original.transporter, row.original.lrNo && `LR ${row.original.lrNo}`].filter(Boolean).join(" · ") || "—"}</p>
-          </div>
-        ),
+        accessorFn: (r) => (r.source === "sale" ? `${r.sale.vehicleNo ?? ""} ${r.sale.driverName ?? ""} ${r.sale.transporter ?? ""} ${r.sale.lrNo ?? ""}` : `${r.pdc.vehicleNo ?? ""} ${r.pdc.driverName ?? ""}`),
+        cell: ({ row }) => {
+          const r = row.original;
+          const detail = r.source === "sale" ? [r.sale.driverName, r.sale.transporter, r.sale.lrNo && `LR ${r.sale.lrNo}`].filter(Boolean).join(" · ") : r.pdc.driverName ?? "";
+          return (
+            <div className="text-xs">
+              <p className="font-mono font-semibold text-gray-700">{r.vehicleNo || "—"}</p>
+              <p className="text-gray-500">{detail || "—"}</p>
+            </div>
+          );
+        },
       },
-      { header: "Items dispatched", id: "items", enableSorting: false, accessorFn: (r) => linesText(r.items), cell: ({ row }) => <ItemsCell items={row.original.items} /> },
-      { header: "Bill value", id: "total", meta: { align: "right" }, accessorFn: (r) => r.total, cell: ({ row }) => <span className="font-semibold">{money(row.original.total)}</span> },
-      { header: "Dispatched by", id: "by", accessorFn: (r) => r.verifiedBy ?? "", cell: ({ row }) => <span className="text-xs text-gray-600">{row.original.verifiedBy || "—"}</span> },
+      {
+        header: "Items",
+        id: "items",
+        enableSorting: false,
+        accessorFn: (r) => (r.source === "sale" ? linesText(r.sale.items) : `${r.pdc.material} ${unitQty(r.pdc.weightKg, "KG")}`),
+        cell: ({ row }) => {
+          const r = row.original;
+          if (r.source === "sale") return <ItemsCell items={r.sale.items} />;
+          const text = `${[r.pdc.material, r.pdc.flow.fabricType, r.pdc.flow.color].filter(Boolean).join(" · ")} ${unitQty(r.pdc.weightKg, "KG")}${r.pdc.packages ? ` · ${r.pdc.packages} ${r.pdc.packageUnit ?? ""}` : ""}`;
+          return <p className="line-clamp-2 max-w-64 text-xs text-gray-700" title={text}>{text}</p>;
+        },
+      },
+      {
+        header: "Bill value",
+        id: "total",
+        meta: { align: "right" },
+        accessorFn: (r) => (r.source === "sale" ? r.sale.total : 0),
+        cell: ({ row }) => (row.original.source === "sale" ? <span className="font-semibold">{money(row.original.sale.total)}</span> : <span className="text-xs text-gray-400">Job work</span>),
+      },
+      {
+        header: "Dispatched by",
+        id: "by",
+        accessorFn: (r) => (r.source === "sale" ? r.sale.verifiedBy ?? "" : ""),
+        cell: ({ row }) => <span className="text-xs text-gray-600">{(row.original.source === "sale" && row.original.sale.verifiedBy) || "—"}</span>,
+      },
       {
         header: "",
         id: "print",
@@ -260,19 +320,26 @@ function Challans() {
         enableGlobalFilter: false,
         cell: ({ row }) => {
           const r = row.original;
+          if (r.source === "production")
+            return (
+              <div className="flex justify-end gap-1">
+                <Button size="sm" variant="outline" onClick={() => setOpenProcess(r.pdc.id)}><Eye size={14} /> Open</Button>
+              </div>
+            );
+          const s = r.sale;
           return (
             <div className="flex justify-end gap-1">
-              <Button size="sm" variant="outline" onClick={() => setOpenDelivery(r.id)}><Eye size={14} /> Open</Button>
+              <Button size="sm" variant="outline" onClick={() => setOpenDelivery(s.id)}><Eye size={14} /> Open</Button>
               <ShareMenu
                 target={deliveryShare({
-                  id: r.id,
-                  challanNo: r.challanNo,
-                  dispatchedAt: r.dispatchedAt,
-                  partyName: r.partyName,
-                  warehouse: r.warehouse,
-                  vehicleNo: r.vehicleNo,
-                  lines: r.items,
-                  value: r.total,
+                  id: s.id,
+                  challanNo: s.challanNo,
+                  dispatchedAt: s.dispatchedAt,
+                  partyName: s.partyName,
+                  warehouse: s.warehouse,
+                  vehicleNo: s.vehicleNo,
+                  lines: s.items,
+                  value: s.total,
                 })}
               />
             </div>
@@ -493,18 +560,33 @@ function Challans() {
     },
   ], []);
 
-  const active = tab === "delivery" ? delivery : tab === "received" ? received : tab === "process" ? process : warehouse;
+  // The Delivery register: sales dispatched and production delivery challans together, newest first.
+  const salesRows = delivery.data ?? [];
+  const processRows = process.data ?? [];
+  const deliveryRows: DeliveryAny[] = [
+    ...salesRows.map((sale): DeliveryAny => ({ key: `sale-${sale.id}`, source: "sale", date: sale.dispatchedAt, vehicleNo: sale.vehicleNo, sale })),
+    ...processRows.map((pdc): DeliveryAny => ({ key: `pdc-${pdc.id}`, source: "production", date: pdc.date, vehicleNo: pdc.vehicleNo, pdc })),
+  ].sort((a, b) => b.date.localeCompare(a.date));
+  const deliveryActive = {
+    data: delivery.data && process.data ? deliveryRows : undefined,
+    error: delivery.error || process.error,
+    reload: async () => {
+      await Promise.all([delivery.reload(), process.reload()]);
+    },
+  };
+  const active = tab === "delivery" ? deliveryActive : tab === "received" ? received : tab === "process" ? process : warehouse;
   const period = from || to ? `${from ? formatDate(from) : "start"} to ${to ? formatDate(to) : "today"}` : "all dates";
   const warehouseRows = warehouse.data?.bills ?? [];
   const count = tab === "warehouse" ? warehouseRows.length : ((active.data as unknown[] | undefined)?.length ?? 0);
-  const value = tab === "delivery" ? (delivery.data ?? []).reduce((s, r) => s + r.total, 0) : (received.data ?? []).reduce((s, r) => s + r.value, 0);
+  const value = tab === "delivery" ? salesRows.reduce((s, r) => s + r.total, 0) : (received.data ?? []).reduce((s, r) => s + r.value, 0);
   const live = warehouseRows.filter((r) => !r.cancelledAt);
 
   // Paperwork gaps: a dispatch or a process hand-off without its vehicle, a receipt without the distributor's challan.
-  const deliveryRows = delivery.data ?? [];
   const receivedRows = received.data ?? [];
-  const processRows = process.data ?? [];
-  const deliveryGaps = deliveryRows.filter((r) => !r.vehicleNo?.trim());
+  const deliveryGaps = deliveryRows.filter((r) => !(r.source === "production" && r.pdc.cancelledAt) && !r.vehicleNo?.trim());
+  const productionDelivery = deliveryRows.filter((r): r is Extract<DeliveryAny, { source: "production" }> => r.source === "production" && !r.pdc.cancelledAt);
+  const deliveryKg = salesRows.reduce((sum, r) => sum + kgOf(r.items), 0) + productionDelivery.reduce((sum, r) => sum + r.pdc.weightKg, 0);
+  const deliveredTo = new Set([...salesRows.map((r) => r.partyName), ...productionDelivery.map((r) => r.pdc.toName)].map((name) => name.trim().toUpperCase()));
   const receivedGaps = receivedRows.filter((r) => !r.challanNo?.trim());
   const processGaps = processRows.filter((r) => !r.cancelledAt && !r.vehicleNo?.trim());
   const processLive = processRows.filter((r) => !r.cancelledAt);
@@ -533,8 +615,12 @@ function Challans() {
     if (tab === "delivery") {
       downloadCsv(
         `delivery-challans-${suffix}.csv`,
-        ["Delivery challan", "Dispatched", "Bill no", "Party type", "Consignee", "Warehouse", "Vehicle", "Driver", "Transporter", "LR no", "Items", "Bill value", "Dispatched by"],
-        shownDelivery.map((r) => [r.challanNo, dayOf(r.dispatchedAt), r.saleNo, PARTY_LABEL[r.partyType], r.partyName, r.warehouse.code, r.vehicleNo, r.driverName, r.transporter, r.lrNo, linesText(r.items), r.total.toFixed(2), r.verifiedBy]),
+        ["Delivery challan", "Type", "Date", "Bill / batch", "Delivered to", "To type", "From", "Vehicle", "Driver", "Transporter", "LR no", "Items", "Weight KG", "Bill value", "Dispatched by", "Status"],
+        shownDelivery.map((r) =>
+          r.source === "sale"
+            ? [r.sale.challanNo, "Sale", dayOf(r.date), r.sale.saleNo, r.sale.partyName, PARTY_LABEL[r.sale.partyType], r.sale.warehouse.code, r.sale.vehicleNo, r.sale.driverName, r.sale.transporter, r.sale.lrNo, linesText(r.sale.items), kgOf(r.sale.items).toFixed(3), r.sale.total.toFixed(2), r.sale.verifiedBy, "Dispatched"]
+            : [r.pdc.challanNo, `Production · ${r.pdc.process}`, dayOf(r.date), r.pdc.flow.flowNo, r.pdc.toName, TO_LABEL[r.pdc.toKind], r.pdc.fromName, r.pdc.vehicleNo, r.pdc.driverName, "", "", `${r.pdc.material}${r.pdc.packages ? ` · ${r.pdc.packages} ${r.pdc.packageUnit ?? ""}` : ""}`, r.pdc.weightKg.toFixed(3), "", "", r.pdc.cancelledAt ? "Cancelled" : "Issued"],
+        ),
       );
     } else if (tab === "process") {
       downloadCsv(
@@ -619,9 +705,13 @@ function Challans() {
               <>
                 <b className="text-gray-700">{count}</b> production delivery challan{count === 1 ? "" : "s"} · {period} · <b className="text-gray-700">{unitQty((process.data ?? []).filter((r) => !r.cancelledAt).reduce((sum, r) => sum + r.weightKg, 0), "KG")}</b> of fabric sent
               </>
+            ) : active.data && tab === "delivery" ? (
+              <>
+                <b className="text-gray-700">{count}</b> delivery challan{count === 1 ? "" : "s"} ({salesRows.length} sale{salesRows.length === 1 ? "" : "s"} · {processRows.length} production) · {period} · bill value <b className="text-gray-700">{money(value)}</b>
+              </>
             ) : active.data ? (
               <>
-                <b className="text-gray-700">{count}</b> {tab === "delivery" ? "delivery" : "received"} challan{count === 1 ? "" : "s"} · {period} · value <b className="text-gray-700">{money(value)}</b>
+                <b className="text-gray-700">{count}</b> received challan{count === 1 ? "" : "s"} · {period} · value <b className="text-gray-700">{money(value)}</b>
               </>
             ) : (
               "Loading…"
@@ -633,10 +723,10 @@ function Challans() {
             <div className="mb-3 grid gap-2.5 sm:grid-cols-2 xl:grid-cols-4">
               {tab === "delivery" ? (
                 <>
-                  <Figure label="Delivery challans" value={String(deliveryRows.length)} caption={period} icon={Truck} tone="total" />
-                  <Figure label="Bill value" value={money(value)} caption="Dispatched bills, with GST" icon={IndianRupee} tone="value" />
-                  <Figure label="KG dispatched" value={unitQty(deliveryRows.reduce((sum, r) => sum + kgOf(r.items), 0), "KG")} caption="Other units are on each challan" icon={Scale} tone="received" />
-                  <Figure label="Consignees" value={String(new Set(deliveryRows.map((r) => r.partyName.trim().toUpperCase())).size)} caption={`${new Set(deliveryRows.map((r) => r.vehicleNo).filter(Boolean)).size} vehicles used`} icon={Users} tone="partial" />
+                  <Figure label="Delivery challans" value={String(deliveryRows.length)} caption={`${salesRows.length} sales · ${processRows.length} production · ${period}`} icon={Truck} tone="total" />
+                  <Figure label="Bill value" value={money(value)} caption="Dispatched sale bills, with GST" icon={IndianRupee} tone="value" />
+                  <Figure label="KG sent" value={unitQty(deliveryKg, "KG")} caption="Sales and production, not cancelled" icon={Scale} tone="received" />
+                  <Figure label="Delivered to" value={String(deliveredTo.size)} caption={`${new Set(deliveryRows.map((r) => r.vehicleNo).filter(Boolean)).size} vehicles used`} icon={Users} tone="partial" />
                 </>
               ) : tab === "received" ? (
                 <>
@@ -692,11 +782,11 @@ function Challans() {
             <DataTable
               data={shownDelivery}
               columns={deliveryColumns}
-              minWidth={1120}
-              searchPlaceholder="Search DC no, bill, consignee, vehicle, driver, LR, item..."
-              getRowId={(row) => row.id}
+              minWidth={1180}
+              searchPlaceholder="Search challan no, bill, batch, party, mill, vehicle, driver, item..."
+              getRowId={(row) => row.key}
               emptyTitle="No delivery challans"
-              emptyDescription={from || to ? "Nothing dispatched in these dates." : "A delivery challan is made each time a warehouse dispatches a sale."}
+              emptyDescription={from || to ? "Nothing dispatched or sent in these dates." : "A delivery challan is made each time a warehouse dispatches a sale, or a batch's fabric is sent on from knitting, dyeing or compacting."}
             />
           ) : tab === "process" ? (
             <DataTable
