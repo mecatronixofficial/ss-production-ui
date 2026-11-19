@@ -1,4 +1,6 @@
 "use client";
+import { entryDate } from "@/lib/entry-date";
+import { EntryDateInput } from "@/components/ui/entry-date-input";
 
 import { useMemo, useState } from "react";
 import { ArrowRightLeft, CalendarCheck, Check, CheckCircle2, Layers } from "lucide-react";
@@ -105,7 +107,7 @@ export function AssignMachinesDialog({
     const first = loadable.find((m) => m.id === initialMachine);
     return first ? { [first.id]: pickFor(first) } : {};
   });
-  const [f, setF] = useState({ startDate: now.date, startShift: now.shift, notes: "" });
+  const [f, setF] = useState(() => ({ startDate: entryDate(undefined, now.date), startShift: now.shift, notes: "" }));
   const set = (changes: Partial<typeof f>) => setF((current) => ({ ...current, ...changes }));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
@@ -183,7 +185,7 @@ export function AssignMachinesDialog({
             ))}
           </select>
         </Field>
-        <Field label="Start date"><Input type="date" max={now.date} value={f.startDate} onChange={(e) => set({ startDate: e.target.value || now.date })} /></Field>
+        <Field label="Start date"><EntryDateInput max={now.date} value={f.startDate} onChange={(e) => set({ startDate: e.target.value || now.date })} /></Field>
         <div className="md:col-span-2">
           <span className="erp-label">Start shift</span>
           <ShiftPicker label="Start shift" value={f.startShift} onChange={(startShift) => set({ startShift })} />
@@ -276,7 +278,7 @@ export function DayEntryDialog({
   onSaved: (runs: KnitRun[], date: string) => void;
 }) {
   const now = currentShift();
-  const [date, setDate] = useState(initialDate ?? defaultEntryDay(runId ? runs.filter((r) => r.id === runId) : runs.filter((r) => r.status === "RUNNING")));
+  const [date, setDate] = useState(() => initialDate ?? entryDate(undefined, defaultEntryDay(runId ? runs.filter((r) => r.id === runId) : runs.filter((r) => r.status === "RUNNING"))));
   const rows = useMemo(
     () => runs.filter((run) => (runId ? run.id === runId : runOnDay(run, date))).sort((a, b) => a.machine.code.localeCompare(b.machine.code)),
     [runs, runId, date],
@@ -384,7 +386,7 @@ export function DayEntryDialog({
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Production day" hint={date === lastProductionDay() ? "Yesterday's day + night" : date === now.date ? "Today's day + night" : undefined}>
           <span className="flex gap-1.5">
-            <Input type="date" min={minDate} max={now.date} value={date} onChange={(e) => pickDate(e.target.value)} />
+            <EntryDateInput min={minDate} max={now.date} value={date} onChange={(e) => pickDate(e.target.value)} />
             {!runId && date !== lastProductionDay() && <Button size="sm" variant="outline" className="h-auto shrink-0" onClick={() => pickDate(lastProductionDay())}>Yesterday</Button>}
           </span>
         </Field>
@@ -453,9 +455,10 @@ export function FinishRunDialog({
   showPrices: boolean;
 }) {
   const now = currentShift();
-  const firstSaved = dayOf(run, now.date);
+  const finishEntryDate = entryDate(run.startedAt, now.date);
+  const firstSaved = dayOf(run, finishEntryDate);
   const [f, setF] = useState({
-    finishDate: now.date,
+    finishDate: finishEntryDate,
     finishShift: now.shift,
     outputKg: firstSaved ? String(firstSaved.outputKg) : "",
     rollCount: firstSaved ? String(firstSaved.rollCount) : "",
@@ -549,7 +552,7 @@ export function FinishRunDialog({
       {error && <p className="knit-alert is-error" role="alert">{error}</p>}
       <div className="grid gap-3 md:grid-cols-3">
         <Field label="Finish date" error={beforeStart ? "Before the run started" : undefined}>
-          <Input type="date" min={run.startedAt.slice(0, 10)} max={now.date} value={f.finishDate} onChange={(e) => pickDate(e.target.value || now.date)} />
+          <EntryDateInput min={run.startedAt.slice(0, 10)} max={now.date} value={f.finishDate} onChange={(e) => pickDate(e.target.value || now.date)} />
         </Field>
         <div className="md:col-span-2">
           <span className="erp-label">Finish shift</span>
@@ -715,7 +718,7 @@ export function MoveRunDialog({
             {targets.map((m) => <option key={m.id} value={m.id}>{m.code} · {m.name}</option>)}
           </select>
         </Field>
-        <Field label="Date of the change"><Input type="date" min={run.startedAt.slice(0, 10)} max={now.date} value={f.date} onChange={(e) => pickDate(e.target.value || now.date)} /></Field>
+        <Field label="Date of the change"><EntryDateInput min={run.startedAt.slice(0, 10)} max={now.date} value={f.date} onChange={(e) => pickDate(e.target.value || now.date)} /></Field>
         <div>
           <span className="erp-label">From shift</span>
           <ShiftPicker label="Shift of the change" value={f.shift} onChange={(shift) => set({ shift })} />

@@ -1,0 +1,410 @@
+/*
+ * Dashboard design (visual only). Scoped to `.dashboard-page.dash` so it outranks the shared dashboard rules in
+ * globals.css without touching other pages. One set of tokens: navy ink, gold accent, quiet borders, layered shadows,
+ * and the same lift / accent / arrow hover language on every card, tile, row and link.
+ */
+.dashboard-page.dash {
+  --d-ink: #0f2a3d;
+  --d-ink-2: #1b3c55;
+  --d-text: #334155;
+  --d-muted: #64748b;
+  --d-faint: #94a3b8;
+  --d-line: #e4e9ef;
+  --d-line-strong: #cfd9e3;
+  --d-soft: #f6f8fb;
+  --d-gold: #c9973f;
+  --d-gold-2: #e9c77b;
+  --d-green: #1f7a5c;
+  --d-radius: 16px;
+  --d-ease: cubic-bezier(.2, .8, .2, 1);
+  --d-shadow: 0 1px 2px rgba(16, 24, 40, .04), 0 2px 6px -2px rgba(16, 24, 40, .06);
+  --d-shadow-hover: 0 18px 36px -18px rgba(15, 42, 61, .32), 0 6px 14px -8px rgba(15, 42, 61, .12);
+  color: var(--d-text);
+}
+
+/* ─────────── Section headings ─────────── */
+.dashboard-page.dash .dash-title > div { position: relative; padding-left: .85rem; }
+.dashboard-page.dash .dash-title > div::before {
+  content: "";
+  position: absolute;
+  top: .15rem;
+  bottom: .15rem;
+  left: 0;
+  width: 3px;
+  border-radius: 999px;
+  background: linear-gradient(180deg, var(--d-gold-2), var(--d-gold));
+}
+.dashboard-page.dash .dash-eyebrow {
+  font-size: .625rem;
+  font-weight: 800;
+  letter-spacing: .18em;
+  text-transform: uppercase;
+  color: var(--d-gold);
+}
+.dashboard-page.dash .dash-heading {
+  margin-top: .2rem;
+  font-size: 1.08rem;
+  font-weight: 800;
+  letter-spacing: -.015em;
+  color: var(--d-ink);
+}
+.dashboard-page.dash .dash-more {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  border: 1px solid var(--d-line);
+  border-radius: 999px;
+  background: #fff;
+  padding: .32rem .7rem;
+  font-size: .72rem;
+  font-weight: 700;
+  color: var(--d-ink-2);
+  transition: background-color .2s var(--d-ease), border-color .2s var(--d-ease), color .2s var(--d-ease), box-shadow .2s var(--d-ease);
+}
+.dashboard-page.dash .dash-more svg { transition: transform .2s var(--d-ease); }
+.dashboard-page.dash .dash-more:hover { border-color: var(--d-ink-2); background: var(--d-ink-2); color: #fff; box-shadow: 0 8px 18px -10px rgba(27, 60, 85, .7); }
+.dashboard-page.dash .dash-more:hover svg { transform: translateX(3px); }
+
+/* ─────────── Hero ─────────── */
+.dashboard-page.dash .dashboard-hero {
+  border-radius: 24px;
+  background:
+    radial-gradient(120% 140% at 100% 0%, rgba(233, 199, 123, .22), transparent 42%),
+    radial-gradient(90% 120% at 0% 100%, rgba(56, 120, 160, .28), transparent 45%),
+    linear-gradient(135deg, #0b2131 0%, #143349 50%, #1d4664 100%);
+  box-shadow: 0 30px 60px -36px rgba(11, 33, 49, .9), inset 0 1px rgba(255, 255, 255, .06);
+}
+.dashboard-page.dash .dashboard-hero::before {
+  background-image:
+    linear-gradient(rgba(255, 255, 255, .035) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(255, 255, 255, .035) 1px, transparent 1px);
+  background-size: 28px 28px;
+  mask-image: radial-gradient(70% 90% at 85% 20%, black, transparent);
+}
+.dashboard-page.dash .dashboard-hero::after {
+  right: auto;
+  left: 1.5rem;
+  width: 4.5rem;
+  height: 3px;
+  background: linear-gradient(90deg, var(--d-gold-2), var(--d-gold));
+}
+.dashboard-page.dash .dashboard-hero__monogram { transition: transform .35s var(--d-ease); }
+.dashboard-page.dash .dashboard-hero:hover .dashboard-hero__monogram { transform: rotate(-6deg) scale(1.05); }
+.dashboard-page.dash .dashboard-hero button { transition: background-color .2s var(--d-ease), border-color .2s var(--d-ease), transform .2s var(--d-ease); }
+.dashboard-page.dash .dashboard-hero button:hover:not(:disabled) { border-color: rgba(233, 199, 123, .6); background: rgba(255, 255, 255, .16); transform: translateY(-1px); }
+
+/* KPI chips in the hero: seven equal, compact boxes (one row on wide screens) */
+.dashboard-page.dash .dash-hero-grid {
+  display: grid;
+  gap: .5rem;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+@media (min-width: 640px) { .dashboard-page.dash .dash-hero-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); } }
+@media (min-width: 1024px) { .dashboard-page.dash .dash-hero-grid { grid-template-columns: repeat(4, minmax(0, 1fr)); } }
+@media (min-width: 1440px) { .dashboard-page.dash .dash-hero-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); } }
+.dashboard-page.dash .dashboard-hero__meta.dash-hero-grid > * { min-width: 0; height: 100%; min-height: 4.1rem; gap: .55rem; padding: .55rem .65rem; }
+.dashboard-page.dash .dash-hero-grid .dashboard-hero-chip-icon { width: 1.8rem; height: 1.8rem; border-radius: 9px; }
+.dashboard-page.dash .dash-chip__label {
+  overflow: hidden;
+  font-size: .56rem;
+  font-weight: 800;
+  letter-spacing: .08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, .45);
+}
+.dashboard-page.dash .dash-chip__value {
+  margin-top: .1rem;
+  overflow: hidden;
+  font-size: .95rem;
+  font-weight: 800;
+  line-height: 1.2;
+  letter-spacing: -.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+.dashboard-page.dash .dash-chip__sub {
+  overflow: hidden;
+  font-size: .62rem;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: rgba(255, 255, 255, .45);
+}
+
+/* KPI chips in the hero */
+.dashboard-page.dash .dashboard-hero__meta > * {
+  border-color: rgba(255, 255, 255, .09);
+  border-radius: 16px;
+  background: linear-gradient(160deg, rgba(255, 255, 255, .08), rgba(255, 255, 255, .025));
+  padding: .7rem .8rem;
+  transition: transform .25s var(--d-ease), border-color .25s var(--d-ease), background-color .25s var(--d-ease), box-shadow .25s var(--d-ease);
+}
+.dashboard-page.dash .dashboard-hero__meta > *::after {
+  content: "";
+  position: absolute;
+  inset: auto 0 0;
+  height: 2px;
+  background: linear-gradient(90deg, var(--d-gold-2), var(--d-gold));
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform .3s var(--d-ease);
+}
+.dashboard-page.dash .dashboard-hero__meta > *:hover {
+  transform: translateY(-3px);
+  border-color: rgba(233, 199, 123, .45);
+  background: linear-gradient(160deg, rgba(255, 255, 255, .13), rgba(255, 255, 255, .04));
+  box-shadow: 0 18px 30px -18px rgba(0, 0, 0, .7);
+}
+.dashboard-page.dash .dashboard-hero__meta > *:hover::after { transform: scaleX(1); }
+.dashboard-page.dash .dashboard-hero-chip-icon { transition: transform .25s var(--d-ease), background-color .25s var(--d-ease); }
+.dashboard-page.dash .dashboard-hero__meta > *:hover .dashboard-hero-chip-icon { transform: scale(1.08); background: rgba(255, 255, 255, .14); }
+.dashboard-page.dash .dashboard-hero__meta > *:focus-visible { outline: 2px solid var(--d-gold-2); outline-offset: 2px; }
+.dashboard-page.dash .dashboard-hero__today { border: 1px solid rgba(255, 255, 255, .06); background: rgba(0, 0, 0, .18); }
+.dashboard-page.dash .dashboard-hero__today-item { transition: background-color .2s var(--d-ease), border-color .2s var(--d-ease); }
+.dashboard-page.dash .dashboard-hero__today-item:hover { border-color: rgba(255, 255, 255, .2); background: rgba(255, 255, 255, .1); }
+
+/* ─────────── Cards ─────────── */
+.dashboard-page.dash .erp-card {
+  border: 1px solid var(--d-line);
+  border-radius: var(--d-radius);
+  background: #fff;
+  box-shadow: var(--d-shadow);
+}
+.dashboard-page.dash .erp-card > .border-b:first-child {
+  border-color: var(--d-line);
+  border-radius: var(--d-radius) var(--d-radius) 0 0;
+  background: linear-gradient(180deg, #fbfcfe, #fff);
+  padding: 1.05rem 1.25rem;
+}
+.dashboard-page.dash .dash-card {
+  position: relative;
+  transition: transform .28s var(--d-ease), box-shadow .28s var(--d-ease), border-color .28s var(--d-ease);
+}
+.dashboard-page.dash .dash-card::after {
+  content: "";
+  position: absolute;
+  inset: 0 0 auto;
+  height: 3px;
+  border-radius: var(--d-radius) var(--d-radius) 0 0;
+  background: linear-gradient(90deg, var(--d-ink-2), var(--d-gold));
+  opacity: 0;
+  transition: opacity .28s var(--d-ease);
+  pointer-events: none;
+}
+.dashboard-page.dash .dash-card:hover { transform: translateY(-3px); border-color: var(--d-line-strong); box-shadow: var(--d-shadow-hover); }
+.dashboard-page.dash .dash-card:hover::after { opacity: 1; }
+
+/* ─────────── KPI tiles ─────────── */
+.dashboard-page.dash .dashboard-stat-tile {
+  border-color: var(--d-line);
+  border-radius: var(--d-radius);
+  background: #fff;
+  box-shadow: var(--d-shadow);
+  transition: transform .28s var(--d-ease), box-shadow .28s var(--d-ease), border-color .28s var(--d-ease), background-color .28s var(--d-ease);
+}
+/* The tone's accent grows along the top on hover */
+.dashboard-page.dash .dashboard-stat-tile::before {
+  height: 3px;
+  transform: scaleX(.18);
+  transform-origin: left;
+  transition: transform .35s var(--d-ease);
+}
+.dashboard-page.dash .dashboard-stat-tile:hover { transform: translateY(-3px); border-color: var(--d-line-strong); box-shadow: var(--d-shadow-hover); }
+.dashboard-page.dash .dashboard-stat-tile:hover::before { transform: scaleX(1); }
+.dashboard-page.dash .dashboard-stat-icon { border-radius: 12px; transition: transform .3s var(--d-ease); }
+.dashboard-page.dash .dashboard-stat-tile:hover .dashboard-stat-icon { transform: translateY(-1px) rotate(-6deg) scale(1.06); }
+.dashboard-page.dash .dash-tile__label { font-size: .64rem; font-weight: 800; letter-spacing: .1em; text-transform: uppercase; color: var(--d-muted); }
+.dashboard-page.dash .dash-tile__value { margin-top: .55rem; font-size: 1.32rem; font-weight: 800; letter-spacing: -.03em; color: var(--d-ink); font-variant-numeric: tabular-nums; }
+.dashboard-page.dash .dash-tile__caption { margin-top: .3rem; font-size: .7rem; color: var(--d-faint); }
+/* Linked tiles show where they go */
+.dashboard-page.dash .dash-tile__go {
+  position: absolute;
+  right: .9rem;
+  bottom: .85rem;
+  color: var(--d-ink-2);
+  opacity: 0;
+  transform: translate(-4px, 4px);
+  transition: opacity .25s var(--d-ease), transform .25s var(--d-ease);
+}
+.dashboard-page.dash a.dashboard-stat-tile:hover .dash-tile__go { opacity: .75; transform: none; }
+.dashboard-page.dash a.dashboard-stat-tile:focus-visible { outline: 2px solid var(--d-ink-2); outline-offset: 2px; }
+.dashboard-page.dash a.dashboard-stat-tile:active { transform: translateY(-1px); }
+
+/* ─────────── Needs attention ─────────── */
+.dashboard-page.dash .dashboard-attention {
+  border: 1px solid var(--d-line);
+  border-radius: 20px;
+  background: #fff;
+  padding: 1rem;
+  box-shadow: var(--d-shadow);
+}
+.dashboard-page.dash .dashboard-attention__item {
+  border-radius: 12px;
+  transition: transform .22s var(--d-ease), box-shadow .22s var(--d-ease), background-color .22s var(--d-ease);
+}
+.dashboard-page.dash .dashboard-attention__item > svg:last-child { transition: transform .22s var(--d-ease), opacity .22s var(--d-ease); }
+.dashboard-page.dash .dashboard-attention__item:hover { transform: translateX(3px); box-shadow: 0 12px 24px -16px rgba(15, 42, 61, .35); }
+.dashboard-page.dash .dashboard-attention__item:hover > svg:last-child { opacity: 1; transform: translateX(3px); }
+.dashboard-page.dash .dashboard-attention__item:hover::before { opacity: 1; }
+.dashboard-page.dash .dashboard-attention__clear { border-radius: 16px; }
+
+/* ─────────── Production flow ─────────── */
+.dashboard-page.dash .dashboard-flow-summary { border-color: var(--d-line); border-radius: 14px; box-shadow: var(--d-shadow); }
+.dashboard-page.dash .dashboard-flow-summary__bar i { transition: filter .2s var(--d-ease); }
+.dashboard-page.dash .dashboard-flow-summary__bar i:hover { filter: brightness(1.15) saturate(1.2); }
+.dashboard-page.dash .dashboard-flow__stage {
+  border-color: var(--d-line);
+  border-radius: var(--d-radius);
+  background: linear-gradient(180deg, color-mix(in srgb, var(--stage) 6%, #fff), #fff 6rem);
+  box-shadow: var(--d-shadow);
+  transition: transform .28s var(--d-ease), box-shadow .28s var(--d-ease), border-color .28s var(--d-ease);
+}
+.dashboard-page.dash .dashboard-flow__stage::before { inset: 0 0 auto; height: 3px; border-radius: var(--d-radius) var(--d-radius) 0 0; transition: height .25s var(--d-ease); }
+.dashboard-page.dash .dashboard-flow__stage:hover {
+  transform: translateY(-4px);
+  border-color: color-mix(in srgb, var(--stage) 45%, var(--d-line));
+  box-shadow: 0 22px 40px -24px color-mix(in srgb, var(--stage) 70%, transparent), 0 6px 14px -8px rgba(15, 42, 61, .12);
+}
+.dashboard-page.dash .dashboard-flow__stage:hover::before { height: 5px; }
+.dashboard-page.dash .dashboard-flow__count { transition: transform .28s var(--d-ease); }
+.dashboard-page.dash .dashboard-flow__stage:hover .dashboard-flow__count { transform: scale(1.08); }
+.dashboard-page.dash .dashboard-flow__stage:hover .dashboard-stat-icon { transform: rotate(-6deg) scale(1.06); }
+.dashboard-page.dash .dashboard-flow__bar > span { transition: width .6s var(--d-ease); }
+.dashboard-page.dash .dashboard-flow__stage li { border-radius: 8px; margin: 0 -.35rem; padding: .2rem .35rem; transition: background-color .2s var(--d-ease); }
+.dashboard-page.dash .dashboard-flow__stage li:hover { background: color-mix(in srgb, var(--stage) 8%, #fff); }
+
+/* ─────────── Production updates ─────────── */
+.dashboard-page.dash .dashboard-update { transition: transform .25s var(--d-ease), box-shadow .25s var(--d-ease), border-color .25s var(--d-ease); }
+.dashboard-page.dash .dashboard-update:hover { transform: translateY(-2px); box-shadow: var(--d-shadow-hover); }
+.dashboard-page.dash .dashboard-update__open { transition: transform .2s var(--d-ease), background-color .2s var(--d-ease), color .2s var(--d-ease); }
+.dashboard-page.dash .dashboard-update:hover .dashboard-update__open { transform: translateX(2px); }
+
+/* ─────────── Lists inside cards ─────────── */
+.dashboard-page.dash .dash-row {
+  position: relative;
+  overflow: hidden;
+  border: 1px solid var(--d-line);
+  border-radius: 12px;
+  background: #fff;
+  transition: transform .2s var(--d-ease), border-color .2s var(--d-ease), background-color .2s var(--d-ease), box-shadow .2s var(--d-ease);
+}
+.dashboard-page.dash .dash-row::before {
+  content: "";
+  position: absolute;
+  inset: 0 auto 0 0;
+  width: 3px;
+  background: linear-gradient(180deg, var(--d-gold-2), var(--d-gold));
+  transform: scaleY(0);
+  transition: transform .22s var(--d-ease);
+}
+.dashboard-page.dash .dash-row:hover { transform: translateX(2px); border-color: var(--d-line-strong); background: var(--d-soft); box-shadow: 0 10px 20px -16px rgba(15, 42, 61, .4); }
+.dashboard-page.dash .dash-row:hover::before { transform: scaleY(1); }
+.dashboard-page.dash .dash-row.is-link:focus-visible { outline: 2px solid var(--d-ink-2); outline-offset: 2px; }
+.dashboard-page.dash .dash-row a:hover { color: var(--d-gold); text-decoration: none; }
+
+/* Alerts */
+.dashboard-page.dash .dash-alert {
+  border: 1px solid var(--d-line);
+  border-radius: 14px;
+  background: var(--d-soft);
+  transition: transform .22s var(--d-ease), box-shadow .22s var(--d-ease), border-color .22s var(--d-ease), background-color .22s var(--d-ease);
+}
+.dashboard-page.dash .dash-alert.is-urgent { border-color: #fecdd3; background: #fff5f6; }
+.dashboard-page.dash .dash-alert:hover { transform: translateY(-2px); border-color: var(--d-line-strong); background: #fff; box-shadow: 0 14px 26px -18px rgba(15, 42, 61, .35); }
+.dashboard-page.dash .dash-alert.is-urgent:hover { border-color: #fda4af; }
+
+/* ─────────── Batches table ─────────── */
+.dashboard-page.dash .dash-table thead { background: var(--d-soft); color: var(--d-muted); }
+.dashboard-page.dash .dash-table thead th { font-size: .62rem; letter-spacing: .12em; }
+.dashboard-page.dash .dash-table tbody td { transition: background-color .18s var(--d-ease), box-shadow .18s var(--d-ease); }
+.dashboard-page.dash .dash-table tbody tr:hover td { background: #f7fafc; }
+.dashboard-page.dash .dash-table tbody tr:hover td:first-child { box-shadow: inset 3px 0 0 var(--d-gold); }
+.dashboard-page.dash .dash-table .customers-code { transition: color .2s var(--d-ease); }
+.dashboard-page.dash .dash-table tbody tr:hover .customers-code { color: var(--d-gold); }
+.dashboard-page.dash .dashboard-steps > i { transition: transform .2s var(--d-ease); }
+.dashboard-page.dash .dash-table tbody tr:hover .dashboard-steps > i.is-now { transform: scaleY(1.35); }
+
+/* ─────────── Money cards ─────────── */
+.dashboard-page.dash .dash-meter-link { margin: 0 -.5rem; border-radius: 10px; padding: .35rem .5rem; transition: background-color .2s var(--d-ease); }
+.dashboard-page.dash .dash-meter-link:hover { background: var(--d-soft); }
+.dashboard-page.dash .dash-meter-link .dashboard-meter > span { transition: filter .2s var(--d-ease); }
+.dashboard-page.dash .dash-meter-link:hover .dashboard-meter > span { filter: brightness(1.08) saturate(1.15); }
+.dashboard-page.dash .dashboard-segments > span,
+.dashboard-page.dash .dashboard-versus > span { transition: filter .2s var(--d-ease); }
+.dashboard-page.dash .dashboard-segments > span:hover,
+.dashboard-page.dash .dashboard-versus > span:hover { filter: brightness(1.12) saturate(1.2); }
+
+/* ─────────── Material flow ─────────── */
+.dashboard-page.dash .dash-seg {
+  display: inline-flex;
+  gap: 2px;
+  border: 1px solid var(--d-line);
+  border-radius: 12px;
+  background: var(--d-soft);
+  padding: 3px;
+  font-size: .7rem;
+  font-weight: 800;
+}
+.dashboard-page.dash .dash-seg button {
+  border-radius: 9px;
+  padding: .3rem .75rem;
+  color: var(--d-muted);
+  transition: background-color .2s var(--d-ease), color .2s var(--d-ease), box-shadow .2s var(--d-ease);
+}
+.dashboard-page.dash .dash-seg button:hover { background: #fff; color: var(--d-ink); }
+.dashboard-page.dash .dash-seg button.is-active { background: var(--d-ink-2); color: #fff; box-shadow: 0 6px 14px -8px rgba(27, 60, 85, .8); }
+.dashboard-page.dash .dash-seg button:focus-visible { outline: 2px solid var(--d-gold); outline-offset: 1px; }
+.dashboard-page.dash .dashboard-compare {
+  border-color: var(--d-line);
+  border-radius: 14px;
+  transition: transform .22s var(--d-ease), box-shadow .22s var(--d-ease), border-color .22s var(--d-ease);
+}
+.dashboard-page.dash .dashboard-compare:hover {
+  transform: translateX(3px);
+  border-color: color-mix(in srgb, var(--series) 40%, var(--d-line));
+  box-shadow: 0 12px 24px -18px color-mix(in srgb, var(--series) 80%, transparent);
+}
+.dashboard-page.dash .dashboard-compare__bars > span { transition: width .6s var(--d-ease); }
+
+/* ─────────── Machines card ─────────── */
+.dashboard-page.dash .dash-machines-hero {
+  position: relative;
+  overflow: hidden;
+  border-radius: 16px;
+  background:
+    radial-gradient(90% 120% at 100% 0%, rgba(233, 199, 123, .2), transparent 50%),
+    linear-gradient(135deg, #0f2a3d, #1b3c55 60%, #24597a);
+  box-shadow: 0 16px 30px -20px rgba(11, 33, 49, .9);
+}
+.dashboard-page.dash .dashboard-ring { transition: transform .4s var(--d-ease); }
+.dashboard-page.dash .dash-card:hover .dashboard-ring { transform: rotate(-8deg) scale(1.04); }
+.dashboard-page.dash .dashboard-ring > * { transition: transform .4s var(--d-ease); }
+.dashboard-page.dash .dash-card:hover .dashboard-ring > * { transform: rotate(8deg); }
+
+/* ─────────── Calm motion when the system asks for it ─────────── */
+@media (prefers-reduced-motion: reduce) {
+  .dashboard-page.dash *,
+  .dashboard-page.dash *::before,
+  .dashboard-page.dash *::after { transition: none !important; }
+  .dashboard-page.dash .dash-card:hover,
+  .dashboard-page.dash .dashboard-stat-tile:hover,
+  .dashboard-page.dash .dashboard-flow__stage:hover,
+  .dashboard-page.dash .dash-row:hover,
+  .dashboard-page.dash .dash-alert:hover,
+  .dashboard-page.dash .dashboard-compare:hover,
+  .dashboard-page.dash .dashboard-update:hover,
+  .dashboard-page.dash .dashboard-hero__meta > *:hover,
+  .dashboard-page.dash .dashboard-attention__item:hover { transform: none; }
+}
+
+/* Touch screens have no hover: keep the resting design, no stuck lifted cards after a tap. */
+@media (hover: none) {
+  .dashboard-page.dash .dash-card:hover,
+  .dashboard-page.dash .dashboard-stat-tile:hover,
+  .dashboard-page.dash .dashboard-flow__stage:hover,
+  .dashboard-page.dash .dash-row:hover,
+  .dashboard-page.dash .dash-alert:hover,
+  .dashboard-page.dash .dashboard-compare:hover { transform: none; }
+}

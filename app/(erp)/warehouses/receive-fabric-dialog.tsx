@@ -1,4 +1,6 @@
 "use client";
+import { entryDate } from "@/lib/entry-date";
+import { EntryDateInput } from "@/components/ui/entry-date-input";
 
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -68,7 +70,7 @@ export function ReceiveFabricDialog({
 }) {
   const sent = toNumber(delivery.weightKg);
   const unit = delivery.packageUnit ?? "rolls";
-  const [receivedDate, setReceivedDate] = useState(todayInput());
+  const [receivedDate, setReceivedDate] = useState(() => entryDate(delivery.deliveredAt));
   const [weight, setWeight] = useState(String(sent));
   const [packages, setPackages] = useState("");
   const [notes, setNotes] = useState("");
@@ -81,6 +83,7 @@ export function ReceiveFabricDialog({
   const fabric = fabricOf(delivery.flow);
 
   const save = async () => {
+    if (!receivedDate || receivedDate < delivery.deliveredAt.slice(0, 10) || receivedDate > todayInput()) return reject("Choose a receipt date on or after dispatch and no later than today.", "Check receipt date");
     if (!(received > 0)) return reject("Enter the weight that arrived.", "Check receipt");
     if (over) return reject(`At most ${TOLERANCE_KG} KG more than the ${kg(sent)} sent.`, "Check receipt");
     if (counted !== null && !(Number.isInteger(counted) && counted >= 0)) return reject(`Enter the ${unit} counted as a whole number.`, "Check receipt");
@@ -133,7 +136,7 @@ export function ReceiveFabricDialog({
 
             <div className="grid gap-3 sm:grid-cols-3">
               <Field label="Received on">
-                <Input type="date" value={receivedDate} max={todayInput()} onChange={(e) => setReceivedDate(e.target.value || todayInput())} />
+                <EntryDateInput value={receivedDate} min={delivery.deliveredAt.slice(0, 10)} max={todayInput()} onChange={(e) => setReceivedDate(e.target.value)} />
               </Field>
               <Field label="Weight here (KG)" error={over ? `At most ${TOLERANCE_KG} KG more than sent` : undefined}>
                 <WeightInput value={weight} onValueChange={setWeight} autoFocus />

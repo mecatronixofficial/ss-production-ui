@@ -1,6 +1,7 @@
 import {
   BarChart3,
   Building2,
+  ClipboardList,
   Factory,
   FileText,
   Gauge,
@@ -46,22 +47,23 @@ export const NAV_SECTIONS: NavSection[] = [
     title: "Overview",
     items: [
       { href: "/dashboard", label: "Dashboard", description: "Production batches, machines, stock, purchases, sales and money at a glance.", icon: Gauge, roles: MANAGERS },
+      { href: "/pi-details", label: "PI Details", description: "Yarn to delivery for each production code: colour lots, stage expenses, loss and remaining stock.", icon: ClipboardList, roles: ADMIN },
+      { href: "/warehouses", label: "Warehouses", description: "Stock in each warehouse, with every in and out movement. “View all warehouses” to add or edit them.", icon: Warehouse, roles: GODOWN },
+      { href: "/yarn-received", label: "Yarn Received", description: "Every yarn delivery by its mill DC: count, bags and weight; each count gets its own yarn code.", icon: PackagePlus, roles: GODOWN },
     ],
   },
   {
     title: "Operations",
     items: [
-      { href: "/production", label: "Production", description: "Admins create production work and move it through each process; managers start and complete knitting tasks.", icon: Factory, roles: MANAGERS },
-      { href: "/sales", label: "Sales", description: "Sell to distributors or textiles: bill, vehicle, and the warehouse verifies and dispatches.", icon: ReceiptIndianRupee, roles: ADMIN },
       { href: "/purchases", label: "Purchases", description: "Purchase orders from distributors and mills, with received material posted into inventory.", icon: PackageCheck, roles: ADMIN },
+      { href: "/production", label: "Production", description: "Admins create production work and move it through each process; managers start and complete knitting tasks.", icon: Factory, roles: MANAGERS },
       { href: "/challans", label: "Challans", description: "Office copies of every delivery and received challan: search, filter by date and print anytime.", icon: FileText, roles: ADMIN },
+      { href: "/sales", label: "Sales", description: "Sell to distributors or textiles: bill, vehicle, and the warehouse verifies and dispatches.", icon: ReceiptIndianRupee, roles: ADMIN },
     ],
   },
   {
     title: "Stock & Assets",
     items: [
-      { href: "/yarn-received", label: "Yarn Received", description: "Every yarn delivery by its mill DC: count, bags and weight; each count gets its own yarn code.", icon: PackagePlus, roles: GODOWN },
-      { href: "/warehouses", label: "Warehouses", description: "Stock in each warehouse, with every in and out movement. “View all warehouses” to add or edit them.", icon: Warehouse, roles: GODOWN },
       { href: "/masters/machines", label: "Machines", description: "Knitting machines, day and night: load yarn by code, take the fabric off into stock, with its cost.", icon: Wrench, roles: MANAGERS },
     ],
   },

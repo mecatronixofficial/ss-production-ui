@@ -1,4 +1,6 @@
 "use client";
+import { entryDate } from "@/lib/entry-date";
+import { EntryDateInput } from "@/components/ui/entry-date-input";
 
 import { useMemo, useRef, useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -15,6 +17,8 @@ import { Field, SectionHeading } from "./fields";
 import { StockPicker } from "./stock-picker";
 import { DyeingLotsInput, firstLines, lotsPayload, lotsProblem } from "./dyeing-lots";
 import { dyesInLots, localDate, type FabricFlow, type FlowDirectory } from "./types";
+import { currentShift, shiftIndex, type KnitBoard, type Shift } from "../masters/machines/types";
+import { MachinePicker, machineAvailable, type MachinePick } from "./machine-picker";
 
 type Process = "knitting" | "dyeing" | "compacting";
 type Stock = { category: string; itemCode: string; itemName: string; lotNo?: string | null; warehouseId: string; unit: string; balanceKg: number };
@@ -28,8 +32,8 @@ const EMPTY = 0.0005;
 const keyOf = (row: Stock) => [row.itemCode, row.warehouseId, row.lotNo ?? "", row.category].join("|");
 
 /** One fabric type to knit from the yarn (Type 1, Type 2…): each becomes a knitting batch of its own; they share the yarn. */
-type FabricType = { fabricType: string; fabricDiameter: string; fabricGsm: string; gg: string; ll: string };
-const newType = (): FabricType => ({ fabricType: "", fabricDiameter: "", fabricGsm: "", gg: "", ll: "" });
+type FabricType = { fabricType: string; fabricDiameter: string; fabricGsm: string; gg: string; ll: string; machines: MachinePick[] };
+const newType = (): FabricType => ({ fabricType: "", fabricDiameter: "", fabricGsm: "", gg: "", ll: "", machines: [] });
 
 /**
  * Starting a process, on one page: knitting, dyeing or compacting, the material from stock and who does it. No
@@ -41,7 +45,8 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
   const [process, setProcess] = useState<Process>("knitting");
   const [picked, setPicked] = useState("");
   const [millType, setMillType] = useState<"OWN" | "OTHER">("OWN");
-  const [f, setF] = useState({ mill: "", startDate: localDate(), expectedFinishDate: "", inwardNo: "", notes: "" });
+  const [f, setF] = useState(() => ({ mill: "", startDate: entryDate(undefined, currentShift().date), expectedFinishDate: "", inwardNo: "", notes: "" }));
+  const [startShift, setStartShift] = useState<Shift>(() => currentShift().shift);
   const [types, setTypes] = useState<FabricType[]>(() => [newType()]);
   const setType = (index: number, changes: Partial<FabricType>) => setTypes((current) => current.map((t, i) => (i === index ? { ...t, ...changes } : t)));
   const set = (changes: Partial<typeof f>) => setF((current) => ({ ...current, ...changes }));
@@ -58,6 +63,7 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
   const yarn = useApiQuery<Stock[]>(`/inventory/balances${qs({ category: "YARN" })}`);
   const grey = useApiQuery<Stock[]>(`/inventory/balances${qs({ category: "GREY_FABRIC" })}`);
   const dyed = useApiQuery<Stock[]>(`/inventory/balances${qs({ category: "DYED_FABRIC" })}`);
+  const machineBoard = useApiQuery<KnitBoard>(process === "knitting" && millType === "OWN" ? "/knitting/board" : null);
   const { data: warehouses = [] } = useApiQuery<Warehouse[]>("/masters/warehouses");
   const warehouseOf = new Map(warehouses.map((w) => [w.id, w]));
   const flowByCode = new Map(flows.map((flow) => [flow.flowNo, flow]));
@@ -81,6 +87,21 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
   const chosen = stock[process].find((row) => keyOf(row) === picked);
   const knitting = process === "knitting";
   const needsMill = !knitting || millType === "OTHER";
+  const ownKnitting = knitting && millType === "OWN";
+  const machines = machineBoard.data?.machines ?? [];
+  const allPicks = types.flatMap((type) => type.machines);
+  const freeMachines = machines.filter((machine) => machineBoard.data && machineAvailable(machine, machineBoard.data));
+  const workingMachines = machines.filter((machine) => machine.status === "RUNNING" || machineBoard.data?.busyMachineIds.includes(machine.id));
+  const now = currentShift();
+  const machineProblem = !ownKnitting ? "" :
+    machineBoard.loading ? "Loading machine details…" :
+    machineBoard.error ? "Could not load machine details. Refresh machines in section 3." :
+    !machineBoard.data ? "Loading machine details…" :
+    types.some((type) => !type.machines.length) ? "Choose at least one free machine for every fabric type in section 3." :
+    new Set(allPicks.map((pick) => pick.machineId)).size !== allPicks.length ? "Choose each machine for only one fabric type." :
+    allPicks.some((pick) => !machines.some((machine) => machine.id === pick.machineId && machineAvailable(machine, machineBoard.data!))) ? "A selected machine is no longer free. Choose another machine in section 3." :
+    allPicks.some((pick) => !/^\d+(\.\d{1,2})?$/.test(pick.ratePerKg) || !Number.isFinite(Number(pick.ratePerKg))) ? "Enter a valid machine charge with up to two decimal places." :
+    shiftIndex(f.startDate, startShift) > shiftIndex(now.date, now.shift) ? "Choose a start shift that has already started." : "";
   /** The code a type will get: the yarn's next knitting batches (KT01, KT02…). */
   const flowCodeHint = (yarnCode: string, index: number) => {
     const taken = flows.filter((fl) => fl.flowNo.startsWith(`${yarnCode}-KT`) && /^\d+$/.test(fl.flowNo.slice(yarnCode.length + 3))).map((fl) => Number(fl.flowNo.slice(yarnCode.length + 3)));
@@ -113,6 +134,7 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
     knitting && types.some((t) => !t.fabricType.trim() || !t.fabricDiameter.trim()) ? (types.length > 1 ? "Enter the fabric type and diameter of every type." : "Enter the fabric type and diameter.") :
     needsMill && !f.mill.trim() ? `Choose the ${process} mill.` :
     !f.startDate ? "Enter the start date." :
+    machineProblem ? machineProblem :
     process === "dyeing" ? lotsProblem(lines, chosen.balanceKg) :
     "";
 
@@ -134,15 +156,17 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
                 fabricGsm: t.fabricGsm.trim() || undefined,
                 gg: t.gg.trim() || undefined,
                 ll: t.ll.trim() || undefined,
+                machines: ownKnitting ? t.machines.map((pick) => ({ machineId: pick.machineId, operatorId: pick.operatorId || undefined, ratePerKg: Number(pick.ratePerKg) })) : undefined,
               })),
               yarnItemCode: chosen.itemCode,
               warehouseId: chosen.warehouseId,
               yarnLotNo: chosen.lotNo ?? undefined,
               yarnCategory: chosen.category,
               startDate: f.startDate,
+              startShift: ownKnitting ? startShift : undefined,
               expectedFinishDate: f.expectedFinishDate || undefined,
               partyDetails: millType === "OWN" ? "Own mill" : undefined,
-              millDetails: millType === "OWN" ? "Pending machine selection" : f.mill.trim(),
+              millDetails: millType === "OWN" ? "Own mill" : f.mill.trim(),
             }),
           })
         : await api<FabricFlow>("/production/fabric-flows/start-stock-process", {
@@ -162,7 +186,7 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
           });
       toast.success(
         knitting
-          ? `${startedText(flow)} ${millType === "OWN" ? "Put them on machines on the Machines page" : `Sent to ${f.mill.trim()}`}; when each finishes, record the fabric made and the yarn used.`
+          ? `${startedText(flow)} ${millType === "OWN" ? "The selected machines are knitting now" : `Sent to ${f.mill.trim()}`}; when each finishes, record the fabric made and the yarn used.`
           : process === "dyeing"
             ? `${lines.length === 1 ? `Dyeing lot ${flow.flowNo}` : `${lines.length} dyeing lots from ${flow.flowNo}`} started at ${f.mill.trim()}.`
             : `${flow.flowNo}: ${process} started at ${f.mill.trim()} with ${kg(chosen.balanceKg)}.`,
@@ -243,7 +267,7 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
               {knitting && (
                 <div className="mb-3 grid gap-2 sm:grid-cols-2" role="radiogroup" aria-label="Knitting mill">
                   {([
-                    ["OWN", "Own mill", "Put it on machines on the Machines page", Factory],
+                    ["OWN", "Own mill", "Choose free machines below and start knitting", Factory],
                     ["OTHER", "Other mill", "Yarn sent to an outside knitting mill", Building2],
                   ] as const).map(([value, title, text, Icon]) => (
                     <button key={value} type="button" role="radio" aria-checked={millType === value} className={cn("start-dialog__mill", millType === value && "is-active")} onClick={() => { setMillType(value); set({ mill: "" }); }}>
@@ -264,7 +288,7 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
                     />
                   </Field>
                 )}
-                <Field label="Start date" required><Input type="date" max={localDate()} value={f.startDate} onChange={(e) => set({ startDate: e.target.value })} /></Field>
+                <Field label="Start / entry date" required hint="Earlier dates allowed"><EntryDateInput max={localDate()} value={f.startDate} onChange={(e) => set({ startDate: e.target.value })} /></Field>
                 {knitting && <Field label="Expected finish" hint="Optional"><Input type="date" min={f.startDate} value={f.expectedFinishDate} onChange={(e) => set({ expectedFinishDate: e.target.value })} /></Field>}
                 {knitting && (
                   <div className="knit-types md:col-span-3">
@@ -309,6 +333,40 @@ export function StartDialog({ directory, flows, onClose, onStarted }: { director
                 {!knitting && <Field label="Notes" hint="Optional" className="md:col-span-3"><Input maxLength={1000} placeholder="Vehicle, instructions…" value={f.notes} onChange={(e) => set({ notes: e.target.value })} /></Field>}
               </div>
             </section>
+
+            {ownKnitting && (
+              <section className="production-field-section">
+                <SectionHeading icon={Factory} title="3 · Choose machines" caption="See which machines are free or working. Choose free machines for each fabric type; open More details to inspect their status and production." />
+                <div className="mb-4 flex flex-wrap items-center gap-2">
+                  <span className="rounded-full bg-emerald-100 px-3 py-1 text-xs font-bold text-emerald-800">{freeMachines.length} free</span>
+                  <span className="rounded-full bg-amber-100 px-3 py-1 text-xs font-bold text-amber-800">{workingMachines.length} working</span>
+                  <span className="rounded-full bg-gray-100 px-3 py-1 text-xs font-bold text-gray-600">{machines.length - freeMachines.length - workingMachines.length} unavailable</span>
+                  <span className="rounded-full bg-[#e8f0f7] px-3 py-1 text-xs font-bold text-[#1b3c55]">{allPicks.length} selected</span>
+                  <Button variant="outline" className="ml-auto" disabled={busy || machineBoard.loading} onClick={() => void machineBoard.reload()}>{machineBoard.loading ? "Loading machines…" : "Refresh machines"}</Button>
+                </div>
+                <Field label="Machine start shift" required className="mb-4 max-w-sm"><select className="erp-input" disabled={busy} value={startShift} onChange={(event) => setStartShift(event.target.value as Shift)}><option value="DAY">Day · 9 AM – 9 PM</option><option value="NIGHT">Night · 9 PM – 9 AM</option></select></Field>
+                {machineBoard.error && <p role="alert" className="mb-3 text-xs text-rose-700">{machineBoard.error}</p>}
+                {!machineBoard.data && !machineBoard.error && <p role="status" className="text-sm text-gray-500">Loading machines and their work details…</p>}
+                {machineBoard.data && (
+                  <div className="grid gap-4">
+                    {types.map((type, index) => (
+                      <div key={index} className="rounded-2xl border border-gray-200 bg-white/70 p-3">
+                        <h3 className="mb-1 text-sm font-bold text-[#123f35]">Type {index + 1}{type.fabricType.trim() ? ` · ${type.fabricType.trim()}` : ""}{type.fabricDiameter.trim() ? ` · ${type.fabricDiameter.trim()}` : ""}</h3>
+                        <p className="mb-3 text-xs text-gray-500">{type.machines.length ? `${type.machines.length} machine${type.machines.length === 1 ? "" : "s"} selected` : "Choose one or more free machines for this fabric."}</p>
+                        <MachinePicker
+                          context={machineBoard.data!}
+                          runs={machineBoard.data!.runs}
+                          picks={type.machines}
+                          reservedIds={types.filter((_, other) => other !== index).flatMap((other) => other.machines.map((pick) => pick.machineId))}
+                          disabled={busy}
+                          onChange={(selected) => setType(index, { machines: selected })}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </section>
+            )}
 
             <div className="users-dialog__foot items-center">
               <p className={cn("mr-auto text-xs", problem ? "font-semibold text-amber-700" : "text-gray-500")}>

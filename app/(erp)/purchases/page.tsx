@@ -24,6 +24,8 @@ import {
   X,
 } from "lucide-react";
 import { api } from "@/lib/api";
+import { entryDate } from "@/lib/entry-date";
+import { EntryDateInput } from "@/components/ui/entry-date-input";
 import { confirmDialog } from "@/lib/confirm-store";
 import { downloadCsv } from "@/lib/csv";
 import {
@@ -262,7 +264,7 @@ export default function PurchasesPage() {
   const [receiving, setReceiving] = useState<{ purchaseOrderId: string } | null>(null);
   const [message, setMessage] = useState<{ text: string; error: boolean } | null>(null);
   const [busy, setBusy] = useState(false);
-  const [purchase, setPurchase] = useState({ supplierId: "", warehouseId: "" });
+  const [purchase, setPurchase] = useState(() => ({ supplierId: "", warehouseId: "", orderDate: entryDate() }));
   const [lines, setLines] = useState<PurchaseLineDraft[]>(() => [blankLine()]);
   const newItemToFocus = useRef<number | null>(null);
   useEffect(() => {
@@ -465,6 +467,7 @@ export default function PurchasesPage() {
     const filled = lines.filter((line) => !isBlank(line));
     if (!supplier) return setCreateError("Select a distributor or mill.");
     if (!purchase.warehouseId) return setCreateError("Choose the warehouse the material is delivered to.");
+    if (!purchase.orderDate || purchase.orderDate > todayInput()) return setCreateError("Choose the actual purchase date, today or earlier.");
     if (filled.length === 0) return setCreateError("Add at least one item.");
     if (filled.some((line) => Object.keys(lineErrors(line, nameOf(line))).length > 0)) {
       setShowLineErrors(true);
@@ -487,7 +490,7 @@ export default function PurchasesPage() {
     try {
       const po = await api<PurchaseOrder>("/procurement/purchase-orders", {
         method: "POST",
-        body: JSON.stringify({ ...(supplier.partyType === "MILL" ? { millId: supplier.millId } : { supplierId: supplier.id }), warehouseId: purchase.warehouseId, items }),
+        body: JSON.stringify({ ...(supplier.partyType === "MILL" ? { millId: supplier.millId } : { supplierId: supplier.id }), warehouseId: purchase.warehouseId, orderDate: purchase.orderDate, items }),
       });
       const text = `Purchase order ${po.poNo} created. ${po.warehouse?.code ?? "The warehouse"} will see it as waiting to be received; each item gets its code when it arrives.`;
       setCreating(false);
@@ -805,6 +808,11 @@ export default function PurchasesPage() {
             <Card className="purchases-card">
               <CardHeader><h3 className="font-bold">Order details</h3></CardHeader>
               <CardContent className="grid gap-4 md:grid-cols-2">
+                <label className="md:col-span-2">
+                  <span className="erp-label">Purchase / entry date *</span>
+                  <EntryDateInput aria-label="Purchase entry date" required max={todayInput()} value={purchase.orderDate} onChange={event => setPurchase(current => ({ ...current, orderDate: event.target.value }))} />
+                  <span className="mt-1 block text-xs text-gray-500">Choose when the purchase happened. This date carries into new receipt and production forms; you can change it at each step.</span>
+                </label>
                 <label>
                   <span className="erp-label">Purchase from *</span>
                   <select className="erp-input" value={purchase.supplierId} onChange={(event) => setPurchase({ ...purchase, supplierId: event.target.value })}>

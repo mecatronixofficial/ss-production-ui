@@ -36,12 +36,14 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Loading } from "@/components/loading";
 import { ErrorState } from "@/components/page-state";
+import { currentShift } from "../masters/machines/types";
 
 type ColumnType = "text" | "date" | "status" | "kg" | "qty" | "money" | "number" | "pct";
 type ReportColumn = { key: string; label: string; type: ColumnType; total?: boolean };
 type Row = Record<string, string | number | null>;
 type CatalogItem = { key: string; title: string; group: string; description: string; dateLabel: string | null };
 type Report = CatalogItem & {
+  machineId?: string | null;
   columns: ReportColumn[];
   rows: Row[];
   summary: Array<{ label: string; value: number | string; type: ColumnType; hint?: string }>;
@@ -104,11 +106,12 @@ const todayStamp = () => {
 /** Rows in the "top" chart above the table. */
 const TOP_ROWS = 8;
 const DEFAULT_REPORT = "monthly-summary";
+const MACHINE_SHIFT_REPORT = "machine-daily-shifts";
 const DEFAULT_PRESET: Preset = "this-fy";
 
 const NUMERIC: ColumnType[] = ["kg", "qty", "money", "number", "pct"];
 /** Status columns coloured by meaning; other enum columns (category, mode, party type…) are plain tags. */
-const STATUS_KEYS = new Set(["status", "payment"]);
+const STATUS_KEYS = new Set(["status", "payment", "dayStatus", "nightStatus", "currentCondition"]);
 const DAY_MS = 86_400_000;
 const localDate = (y: number, m: number, d = 1) => new Date(y, m, d);
 /** yyyy-mm-dd from a date input, read as local midnight. */
@@ -202,6 +205,8 @@ function ReportTable({ report }: { report: Report }) {
         meta: { align: NUMERIC.includes(c.type) ? "right" : "left" },
         cell: ({ row }) => {
           const v = row.original[c.key];
+          if (report.key === MACHINE_SHIFT_REPORT && ["dayWork", "nightWork", "started", "stopped"].includes(c.key)) return <span className="block min-w-[15rem] max-w-[24rem] whitespace-pre-line text-xs leading-relaxed">{v || "—"}</span>;
+          if (report.key === MACHINE_SHIFT_REPORT && v === null && NUMERIC.includes(c.type)) return "—";
           if (c.type === "status" && v)
             return <Badge tone={STATUS_KEYS.has(c.key) ? statusTone(String(v)) : "default"}>{humanize(String(v))}</Badge>;
           if (c.type === "text" && index === 0) return <span className="font-semibold text-gray-800">{formatValue(v, c.type)}</span>;
@@ -219,7 +224,7 @@ function ReportTable({ report }: { report: Report }) {
           return <span className={cn(negative(sum, c.type) && "rpt-negative")}>{formatValue(sum, c.type)}</span>;
         },
       })),
-    [report.columns, report.totals],
+    [report.columns, report.totals, report.key],
   );
 
   return (
@@ -330,20 +335,26 @@ export default function Reports() {
   const catalog = useApiQuery<CatalogItem[]>("/reports", { persist: user?.id });
   const info = catalog.data?.find((r) => r.key === selected) ?? catalog.data?.[0];
   const usesDates = info ? info.dateLabel !== null : true;
+  const machineDaily = info?.key === MACHINE_SHIFT_REPORT;
+  const machineDay = isDateInput(params.get("day")) ? params.get("day")! : currentShift().date;
+  const machineId = params.get("machine") || "";
+  const machines = useApiQuery<Array<{ id: string; code: string; name: string }>>(machineDaily ? "/masters/machines" : null);
 
   const range = useMemo(() => rangeFor(preset, customFrom, customTo), [preset, customFrom, customTo]);
   const query = useMemo(() => {
     const q = new URLSearchParams();
+    if (machineDaily) { q.set("day", machineDay); if (machineId) q.set("machineId", machineId); return q; }
     if (!usesDates) return q;
     if (range.from) q.set("from", range.from.toISOString());
     if (range.to) q.set("to", range.to.toISOString());
     return q;
-  }, [range, usesDates]);
-  const customInvalid = preset === "custom" && Boolean(customFrom && customTo && customFrom > customTo);
+  }, [range, usesDates, machineDaily, machineDay, machineId]);
+  const customInvalid = machineDaily ? machineDay > currentShift().date : preset === "custom" && Boolean(customFrom && customTo && customFrom > customTo);
   const report = useApiQuery<Report>(info && !customInvalid ? `/reports/${info.key}?${query}` : null);
   /** The same dates for another report (a report "as of today" takes none), to start loading it on hover. */
   const pathFor = (r: CatalogItem) => `/reports/${r.key}?${r.dateLabel === null ? "" : (() => {
     const q = new URLSearchParams();
+    if (r.key === MACHINE_SHIFT_REPORT) { q.set("day", machineDay); if (machineId) q.set("machineId", machineId); return q; }
     if (range.from) q.set("from", range.from.toISOString());
     if (range.to) q.set("to", range.to.toISOString());
     return q;
@@ -378,7 +389,7 @@ export default function Reports() {
     if (!info) return;
     setDownloading(format);
     try {
-      await apiDownload(`/reports/${info.key}/export.${format}?${query}`, `${info.key}-report-${todayStamp()}.${format}`);
+      await apiDownload(`/reports/${info.key}/export.${format}?${query}`, `${info.key}-report-${machineDaily ? machineDay : todayStamp()}.${format}`);
     } catch {
       // api() already showed the error.
     } finally {
@@ -406,7 +417,7 @@ export default function Reports() {
   const GroupIcon = grouped.find((g) => g.name === info.group)?.icon ?? BarChart3;
   const kindOf = (group: string) => GROUP_KIND[group] ?? "production";
   const recentReports = recent.filter((k) => k !== info.key).map((k) => catalog.data?.find((r) => r.key === k)).filter((r): r is CatalogItem => !!r);
-  const data = report.data?.key === info.key ? report.data : undefined;
+  const data = report.data?.key === info.key && (!machineDaily || report.data.from?.slice(0, 10) === machineDay && report.data.machineId === (machineId || null)) ? report.data : undefined;
   const customEmpty = preset === "custom" && !customFrom && !customTo;
 
   return (
@@ -500,7 +511,15 @@ export default function Reports() {
         </header>
 
         <div className="rpt-filters">
-          {usesDates ? (
+          {machineDaily ? (
+            <div className="flex w-full flex-wrap items-end gap-3">
+              <label><span className="erp-label">Production day</span><Input type="date" aria-label="Machine report production day" value={machineDay} max={currentShift().date} onChange={e => setParams({ day: e.target.value || null })} /></label>
+              <label className="min-w-[200px]"><span className="erp-label">Machine</span><select className="erp-input" aria-label="Machine report filter" value={machineId} onChange={e => setParams({ machine: e.target.value || null })}><option value="">All company machines</option>{machines.data?.map(machine => <option key={machine.id} value={machine.id}>{machine.code} · {machine.name}</option>)}</select></label>
+              <Button variant="outline" size="sm" onClick={() => setParams({ day: currentShift().date })}>Current production day</Button>
+              <span className="text-xs text-gray-500">Day: 9 AM–9 PM · Night: 9 PM–9 AM next day · IST</span>
+              {machines.error && <span className="text-xs text-red-600">Could not load machine choices. <button className="underline" onClick={() => void machines.reload()}>Retry</button></span>}
+            </div>
+          ) : usesDates ? (
             <>
               <span className="rpt-filters__label">
                 <CalendarRange size={14} aria-hidden /> {info.dateLabel}
@@ -542,7 +561,7 @@ export default function Reports() {
 
         {customInvalid ? (
           <p className="rpt-warning">
-            <AlertTriangle size={14} /> Choose a start date on or before the end date to see this report.
+            <AlertTriangle size={14} /> {machineDaily ? "Choose the current or an earlier production day." : "Choose a start date on or before the end date to see this report."}
           </p>
         ) : !data && report.error ? (
           <ErrorState message={report.error} onRetry={() => void report.reload()} />
