@@ -1,4 +1,6 @@
 "use client";
+import { entryDate } from "@/lib/entry-date";
+import { EntryDateInput } from "@/components/ui/entry-date-input";
 
 import { useState } from "react";
 import * as Dialog from "@radix-ui/react-dialog";
@@ -51,7 +53,7 @@ export function ReceiveYarnDialog({ receipt, showPrices, onClose, onSaved }: { r
   const { data: warehouses = [] } = useApiQuery<Warehouse[]>("/masters/warehouses");
   const active = warehouses.filter((w) => w.active !== false || w.id === receipt?.warehouseId);
   const [f, setF] = useState({
-    receivedAt: receipt ? receipt.receivedAt.slice(0, 10) : today(),
+    receivedAt: receipt ? receipt.receivedAt.slice(0, 10) : entryDate(),
     dcNo: receipt?.dcNo ?? "",
     millName: receipt?.millName ?? "",
     agentName: receipt?.agentName ?? "Direct",
@@ -139,7 +141,7 @@ export function ReceiveYarnDialog({ receipt, showPrices, onClose, onSaved }: { r
             {error && <div className="flex items-center gap-2 rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-800"><AlertTriangle size={17} />{error}</div>}
 
             <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-              <label className="block"><span className="erp-label">Date *</span><Input type="date" max={today()} value={f.receivedAt} onChange={(e) => set({ receivedAt: e.target.value })} /></label>
+              <label className="block"><span className="erp-label">Receipt / entry date *</span><EntryDateInput max={today()} value={f.receivedAt} onChange={(e) => set({ receivedAt: e.target.value })} /></label>
               <label className="block"><span className="erp-label">DC no *</span><Input maxLength={60} placeholder="Mill's delivery challan" value={f.dcNo} onChange={(e) => set({ dcNo: e.target.value })} /></label>
               <label className="block">
                 <span className="erp-label">Warehouse *</span>

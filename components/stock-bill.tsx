@@ -16,6 +16,7 @@ import { Loading } from "@/components/loading";
 import { ErrorState } from "@/components/page-state";
 import { ShareMenu } from "@/components/share-menu";
 import { ItemSpecs, type ItemSpec } from "@/components/challan-parts";
+import { YarnReceivedNote } from "@/components/yarn-received-note";
 
 export type StockBillKind = "RECEIVED" | "EXPORT";
 export type StockBill = {
@@ -142,6 +143,9 @@ export function StockBillDialog({ billId, canManage, onClose, onChanged }: { bil
                     Cancelled {formatDateTime(bill.cancelledAt)}{bill.cancelledBy ? ` by ${bill.cancelledBy}` : ""}{bill.cancelReason ? `: ${bill.cancelReason}` : ""}.
                   </p>
                 )}
+                {bill.referenceType === "YARN_RECEIPT" && bill.kind === "RECEIVED" ? (
+                  <YarnReceivedNote bill={bill} />
+                ) : (
                 <article className={`sale-bill challan-doc${bill.cancelledAt ? " is-cancelled" : ""}`}>
                   <header className="sale-bill__head">
                     <span className="sale-bill__logo"><Image src={BRAND.logo} alt="" width={56} height={56} className="h-full w-full object-cover" /></span>
@@ -235,6 +239,7 @@ export function StockBillDialog({ billId, canManage, onClose, onChanged }: { bil
                     <div className="text-center"><div className="sale-bill__sign" />For {c.legalName || c.name || BRAND.name}<br />Warehouse in-charge</div>
                   </footer>
                 </article>
+                )}
 
                 {cancelling && (
                   <label className="block print:hidden">

@@ -24,6 +24,9 @@ import { InlineMessage } from "@/components/ui/inline-message";
 import { Input } from "@/components/ui/input";
 import { PACKAGES_PATTERN, packageTotal, packageUnitOf, ReceiveCheck } from "@/components/ui/receive-check";
 import { WeightInput } from "@/components/ui/weight-input";
+import { EntryDateInput } from "@/components/ui/entry-date-input";
+import { entryDate } from "@/lib/entry-date";
+import { todayInput } from "@/lib/utils";
 
 /** What the godown checks on a line besides what it weighed: the DC's quantity, bags / rolls, and the count or shade. */
 type LineCheck = { dc: string; packages: string; details: string };
@@ -86,6 +89,7 @@ export function ReceiveDialog({
     "";
   const firstPo = purchaseOrders.find((po) => po.id === initialPurchaseOrderId) ?? (purchaseOrders.length === 1 ? purchaseOrders[0] : undefined);
   const [purchaseOrderId, setPurchaseOrderId] = useState(firstPo?.id ?? "");
+  const [receivedDate, setReceivedDate] = useState(() => entryDate(firstPo?.orderDate));
   const [warehouseId, setWarehouseId] = useState(defaultWarehouse(firstPo));
   const [category, setCategory] = useState<StockCategory>(categoryFor(firstPo?.supplier.materialCategory));
   const [lotNo, setLotNo] = useState("");
@@ -136,6 +140,7 @@ export function ReceiveDialog({
     setVehicleNo("");
     setNotes("");
     if (next) {
+      setReceivedDate(entryDate(next.orderDate));
       setCategory(categoryFor(next.supplier.materialCategory));
       setWarehouseId(defaultWarehouse(next));
     }
@@ -143,6 +148,7 @@ export function ReceiveDialog({
 
   const save = async () => {
     if (!po || !warehouseId) return reject("Select a purchase order and receiving warehouse.", "Check receipt");
+    if (!receivedDate || receivedDate > todayInput() || receivedDate < po.orderDate.slice(0, 10)) return reject("Choose a receipt date on or after the purchase date and no later than today.", "Check receipt date");
     const invalid = po.items.find((item) => {
       const value = quantities[item.id] ?? "";
       return value !== "" && (!Number.isFinite(Number(value)) || Number(value) < 0 || decimals(value) > maxDecimals(item.unit));
@@ -185,6 +191,7 @@ export function ReceiveDialog({
         method: "POST",
         body: JSON.stringify({
           warehouseId,
+          receivedDate,
           category: needsCategory ? category : undefined,
           lotNo: lotNo.trim() || undefined,
           challanNo: challanNo.trim() || undefined,
@@ -210,7 +217,7 @@ export function ReceiveDialog({
                   Receive Material (GRN){fixedWarehouse ? ` into ${fixedWarehouse.code}` : ""}
                 </Dialog.Title>
                 <p id="receive-dialog-help" className="text-xs text-gray-500">
-                  Enter only what arrived today. Whatever is left stays open on the PO. Each item gets its own code (01SS26…) the first time it is received.
+                  Enter what arrived on the selected receipt date. Whatever is left stays open on the PO. Each item gets its own code (01SS26…) the first time it is received.
                 </p>
               </div>
             </div>
@@ -226,6 +233,11 @@ export function ReceiveDialog({
           >
             <InlineMessage message={message} />
             <div className="grid gap-2.5 sm:grid-cols-2">
+              <label className="sm:col-span-2">
+                <span className="erp-label">Received / entry date *</span>
+                <EntryDateInput aria-label="Goods receipt date" required min={po?.orderDate.slice(0, 10)} max={todayInput()} value={receivedDate} onChange={event => setReceivedDate(event.target.value)} />
+                <span className="mt-1 block text-xs text-gray-500">Stock and receipt calculations use this date.</span>
+              </label>
               <label>
                 <span className="erp-label">Purchase order *</span>
                 <select className="erp-input" value={purchaseOrderId} onChange={(event) => choose(event.target.value)}>

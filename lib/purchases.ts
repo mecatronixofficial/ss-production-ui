@@ -130,6 +130,10 @@ export type ReceivedChallan = {
     amount: number | null;
     /** The item's full details: this receipt's lot, distributor, PO, and for fabric its construction. */
     specs: Array<{ label: string; value: string }>;
+    /** Bags / rolls as written at receipt ("30+9") and their total. */
+    packages?: string | null;
+    packageCount?: number | null;
+    details?: string | null;
   }>;
   /** Null when prices are hidden from the viewer. */
   total: number | null;

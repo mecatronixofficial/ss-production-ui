@@ -50,6 +50,7 @@ import { useAuth } from "@/components/auth-provider";
 import { readSnapshot, saveSnapshot } from "@/lib/use-api-query";
 import { ATTENTION_KINDS, kindOfHref, notificationIcon, notificationKind, type AttentionKind } from "@/lib/attention";
 import { machineHref, runHref, shiftText } from "../masters/machines/types";
+import "./dashboard.css";
 
 // recharts is the heaviest dependency in the app; load it after the dashboard shell renders.
 const ProductionChart = dynamic(() => import("@/components/production-chart").then((m) => m.ProductionChart), {
@@ -116,23 +117,28 @@ function StatTile({ title, value, caption, icon: Icon, tone = "green", href }: {
   const body = (
     <div className="flex items-start justify-between gap-2">
       <div className="min-w-0">
-        <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">{title}</p>
-        <p className="mt-2 truncate text-xl font-bold tracking-[-.03em] text-gray-800">{value}</p>
-        {caption && <p className="mt-1 truncate text-[11px] text-gray-400" title={caption}>{caption}</p>}
+        <p className="dash-tile__label">{title}</p>
+        <p className="dash-tile__value truncate">{value}</p>
+        {caption && <p className="dash-tile__caption truncate" title={caption}>{caption}</p>}
       </div>
       <div className={cn("dashboard-stat-icon h-10 w-10 shrink-0", TONES[tone])}><Icon size={17} /></div>
     </div>
   );
   const className = cn("dashboard-stat-tile p-4", `is-${tone}`);
-  return href ? <Link href={href} className={cn(className, "block")}>{body}</Link> : <div className={className}>{body}</div>;
+  return href ? (
+    <Link href={href} className={cn(className, "block")}>
+      {body}
+      <ArrowUpRight className="dash-tile__go" size={14} aria-hidden />
+    </Link>
+  ) : <div className={className}>{body}</div>;
 }
 
 function SectionTitle({ eyebrow, title, action }: { eyebrow: string; title: string; action?: React.ReactNode }) {
   return (
-    <div className="flex flex-wrap items-end justify-between gap-3">
+    <div className="dash-title flex flex-wrap items-end justify-between gap-3">
       <div>
-        <p className="text-[10px] font-extrabold uppercase tracking-[.2em] text-[#a77a24]">{eyebrow}</p>
-        <h3 className="mt-1 text-lg font-bold tracking-tight text-[#183b32]">{title}</h3>
+        <p className="dash-eyebrow">{eyebrow}</p>
+        <h3 className="dash-heading">{title}</h3>
       </div>
       {action}
     </div>
@@ -140,8 +146,8 @@ function SectionTitle({ eyebrow, title, action }: { eyebrow: string; title: stri
 }
 
 const MoreLink = ({ href, children }: { href: string; children: React.ReactNode }) => (
-  <Link href={href} className="text-xs font-bold text-[#266956] hover:underline">
-    {children} <ArrowRight className="ml-0.5 inline" size={13} />
+  <Link href={href} className="dash-more">
+    {children} <ArrowRight size={13} aria-hidden />
   </Link>
 );
 
@@ -193,7 +199,7 @@ function StageSteps({ status }: { status: string }) {
 /** The dashboard's shape while it loads for the first time in this tab. */
 function DashboardSkeleton() {
   return (
-    <div className="dashboard-page mx-auto max-w-[1800px] space-y-6 pb-8" role="status" aria-label="Loading dashboard">
+    <div className="dashboard-page dash mx-auto max-w-[1800px] space-y-7 pb-10" role="status" aria-label="Loading dashboard">
       <div className="dashboard-hero h-[214px] rounded-[22px] md:h-[190px]" />
       <div className="grid gap-2 lg:grid-cols-2">
         {[0, 1].map((i) => <div key={i} className="h-11 animate-pulse rounded-[14px] bg-gray-200/60" />)}
@@ -330,7 +336,7 @@ export default function Dashboard() {
   const runningShown = 6;
 
   return (
-    <div className="dashboard-page mx-auto max-w-[1800px] space-y-6 pb-8">
+    <div className="dashboard-page dash mx-auto max-w-[1800px] space-y-7 pb-10">
       {/* ---------- Hero ---------- */}
       <section className="dashboard-hero overflow-hidden rounded-[22px] p-4 text-white md:p-5">
         <div className="relative z-10 flex flex-col justify-between gap-4 lg:flex-row lg:items-start">
@@ -362,20 +368,22 @@ export default function Dashboard() {
           </div>
         </div>
 
-        <div className="dashboard-hero__meta relative z-10 mt-4 grid gap-2 border-t border-white/10 pt-4 sm:grid-cols-2 lg:grid-cols-3 2xl:grid-cols-5">
+        <div className="dashboard-hero__meta dash-hero-grid relative z-10 mt-4 border-t border-white/10 pt-4">
           {([
             ["Batches in production", String(p.active), kg(p.inProcessKg), Factory, "text-amber-200", "/production"],
             ["Machines knitting", `${m.knitting} / ${m.total}`, `${utilization}% in use`, Gauge, "text-emerald-300", "/masters/machines"],
             ["Ready to deliver", kg(p.readyKg), plural(readyCount, "batch", "batches"), PackageCheck, "text-emerald-300", "/production"],
+            ["Finished fabric stock", kg(d.stockKg.FINISHED_FABRIC), "in warehouses", Warehouse, d.stockKg.FINISHED_FABRIC < -0.0005 ? "text-rose-300" : "text-sky-300", "/warehouses?category=FINISHED_FABRIC"],
+            ["Yarn balance", kg(d.stockKg.YARN), "in warehouses", Boxes, d.stockKg.YARN < -0.0005 ? "text-rose-300" : "text-amber-200", "/warehouses?category=YARN"],
             ["Waiting for a machine", String(m.knittingTasks), m.knittingTasks ? "knitting tasks" : "none waiting", ClipboardList, m.knittingTasks ? "text-amber-200" : "text-emerald-300", "/masters/machines"],
-            ["Machines down", String(down), down ? `${maintenance} maintenance · ${breakdown} breakdown` : "all working", Wrench, down ? "text-rose-300" : "text-emerald-300", "/masters/machines"],
+            ["Machines down", String(down), down ? `${maintenance} maint. · ${breakdown} breakdown` : "all working", Wrench, down ? "text-rose-300" : "text-emerald-300", "/masters/machines"],
           ] as const).map(([label, value, sub, Icon, tone, href]) => (
-            <Link key={label} href={href}>
-              <div className="dashboard-hero-chip-icon"><Icon size={16} className={tone} /></div>
+            <Link key={label} href={href} title={`${label}: ${value} · ${sub}`}>
+              <div className="dashboard-hero-chip-icon"><Icon size={14} className={tone} /></div>
               <div className="min-w-0">
-                <p className="truncate text-[9px] font-bold uppercase tracking-wider text-white/40">{label}</p>
-                <p className="mt-0.5 text-base font-bold leading-tight">{value}</p>
-                <p className="truncate text-[10px] text-white/45">{sub}</p>
+                <p className="dash-chip__label">{label}</p>
+                <p className="dash-chip__value">{value}</p>
+                <p className="dash-chip__sub">{sub}</p>
               </div>
             </Link>
           ))}
@@ -627,7 +635,7 @@ export default function Dashboard() {
             </div>
 
             <div className="mt-2.5 grid gap-2.5 lg:grid-cols-3">
-              <Card className="p-4">
+              <Card className="dash-card p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Cash flow this month</p>
@@ -641,7 +649,7 @@ export default function Dashboard() {
                     ["Money in", cash.month.moneyIn, `Received ${money(cash.month.receivedTotal)} · deliveries ${money(cash.month.collected)}`, "is-in", ArrowDownCircle],
                     ["Money out", cash.month.moneyOut, `Suppliers ${money(cash.month.supplierPaid)} · other ${money(cash.month.otherPaid)} · expenses ${money(cash.month.expenses)}`, "is-out", ArrowUpCircle],
                   ] as const).map(([label, value, note, tone, Icon]) => (
-                    <Link key={label} href="/money?tab=entries" className="block">
+                    <Link key={label} href="/money?tab=entries" className="dash-meter-link block">
                       <div className="flex items-center justify-between text-xs">
                         <span className="flex items-center gap-1.5 font-semibold text-gray-600"><Icon size={13} /> {label}</span>
                         <b className="tabular-nums text-gray-800">{money(value)}</b>
@@ -653,7 +661,7 @@ export default function Dashboard() {
                 </div>
               </Card>
 
-              <Card className="p-4">
+              <Card className="dash-card p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Owed to us vs owed by us</p>
@@ -675,7 +683,7 @@ export default function Dashboard() {
                 </p>
               </Card>
 
-              <Card className="p-4">
+              <Card className="dash-card p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-[10px] font-bold uppercase tracking-wide text-gray-500">Cash, bank & UPI</p>
@@ -702,17 +710,17 @@ export default function Dashboard() {
 
       {/* ---------- Material flow ---------- */}
       <section className="grid gap-5 2xl:grid-cols-[minmax(0,1.6fr)_minmax(340px,.55fr)]">
-        <Card className="overflow-hidden">
+        <Card className="dash-card overflow-hidden">
           <CardHeader className="flex flex-row flex-wrap items-end justify-between gap-4">
             <SectionTitle eyebrow="Material flow" title={`KG per day · last ${trendDays} days`} />
-            <div className="flex rounded-xl bg-gray-100 p-0.5 text-[11px] font-bold" role="group" aria-label="Trend range">
+            <div className="dash-seg" role="group" aria-label="Trend range">
               {TREND_RANGES.map((range) => (
                 <button
                   key={range}
                   type="button"
                   aria-pressed={trendDays === range}
                   onClick={() => setTrendDays(range)}
-                  className={cn("rounded-[10px] px-3 py-1 transition", trendDays === range ? "bg-white text-[#183b32] shadow-sm" : "text-gray-500 hover:text-gray-700")}
+                  className={cn(trendDays === range && "is-active")}
                 >
                   {range}D
                 </button>
@@ -739,7 +747,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden">
+        <Card className="dash-card overflow-hidden">
           <CardHeader>
             <SectionTitle eyebrow="Compared" title={`vs the ${trendDays} days before`} />
           </CardHeader>
@@ -774,7 +782,7 @@ export default function Dashboard() {
 
       {/* ---------- Shop floor ---------- */}
       <section className="grid gap-5 2xl:grid-cols-[minmax(0,1.6fr)_minmax(340px,.55fr)]">
-        <Card className="overflow-hidden">
+        <Card className="dash-card overflow-hidden">
           <CardHeader>
             <SectionTitle
               eyebrow="Shop floor"
@@ -791,7 +799,7 @@ export default function Dashboard() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full min-w-[820px] text-sm">
+                <table className="dash-table w-full min-w-[820px] text-sm">
                   <thead className="bg-[#f7f9f8] text-left text-[10px] font-bold uppercase tracking-[.1em] text-gray-400">
                     <tr>
                       <th className="px-5 py-3">Batch</th>
@@ -803,7 +811,7 @@ export default function Dashboard() {
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {p.batches.map((b) => (
-                      <tr key={b.id} className="transition hover:bg-[#fafcfb]">
+                      <tr key={b.id}>
                         <td className="px-5 py-3.5">
                           <Link href={`/production?batch=${encodeURIComponent(b.flowNo)}`} className="customers-code">{b.flowNo}</Link>
                           <p className="mt-1 text-[11px] text-gray-500">{b.fabric}{b.color ? ` · ${b.color}` : ""}</p>
@@ -834,12 +842,12 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden">
+        <Card className="dash-card overflow-hidden">
           <CardHeader>
             <SectionTitle eyebrow="Knitting" title="Machines" action={<MoreLink href="/masters/machines">Machines</MoreLink>} />
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-5 rounded-2xl bg-[#1b3c55] p-4 text-white">
+            <div className="dash-machines-hero flex items-center gap-5 p-4 text-white">
               <div className="dashboard-ring h-20 w-20 shrink-0" style={{ background: `conic-gradient(#d3a64c ${utilization * 3.6}deg, rgba(255,255,255,.14) 0deg)` }}>
                 <span className="text-xl font-bold">{utilization}%</span>
               </div>
@@ -863,7 +871,7 @@ export default function Dashboard() {
             {m.running.length > 0 && (
               <ul className="mt-4 space-y-1.5 border-t border-gray-100 pt-3">
                 {m.running.slice(0, runningShown).map((r) => (
-                  <li key={r.id} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 px-3 py-2 text-xs">
+                  <li key={r.id} className="dash-row flex items-center justify-between gap-2 px-3 py-2 text-xs">
                     <span className="min-w-0">
                       <span className="mr-1.5 inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-emerald-500 align-middle" />
                       <Link href={machineHref(r.machineId)} className="font-bold text-[#1b3c55] hover:underline">{r.machine}</Link>
@@ -882,7 +890,7 @@ export default function Dashboard() {
 
       {/* ---------- Stock, purchases, sales, alerts ---------- */}
       <section className={cn("grid gap-5 lg:grid-cols-2", d.isAdmin ? "2xl:grid-cols-4" : "2xl:grid-cols-3")}>
-        <Card className="overflow-hidden">
+        <Card className="dash-card overflow-hidden">
           <CardHeader>
             <SectionTitle eyebrow="Warehouses" title="Stock on hand" action={<MoreLink href="/warehouses">Warehouses</MoreLink>} />
           </CardHeader>
@@ -918,7 +926,7 @@ export default function Dashboard() {
           </CardContent>
         </Card>
 
-        <Card className="overflow-hidden">
+        <Card className="dash-card overflow-hidden">
           <CardHeader>
             <SectionTitle eyebrow="Incoming" title="Material on the way" action={d.isAdmin ? <MoreLink href="/purchases">Purchases</MoreLink> : undefined} />
           </CardHeader>
@@ -943,7 +951,7 @@ export default function Dashboard() {
               <ul className="space-y-1.5">
                 {d.purchases.next.map((po) => {
                   return (
-                    <li key={po.id} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 px-3 py-2 text-xs">
+                    <li key={po.id} className="dash-row flex items-center justify-between gap-2 px-3 py-2 text-xs">
                       <span className="min-w-0">
                         {d.isAdmin ? <Link href={`/purchases/${po.id}`} className="font-bold text-[#1b3c55] hover:underline">{po.poNo}</Link> : <b>{po.poNo}</b>}
                         <span className="block truncate text-[11px] text-gray-500">{po.supplier}</span>
@@ -959,7 +967,7 @@ export default function Dashboard() {
                 <ul className="space-y-1.5">
                   {d.awaitingFabric.next.map((row) => (
                     <li key={row.id}>
-                      <Link href={row.warehouseId ? `/warehouses?warehouse=${row.warehouseId}` : "/warehouses"} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 px-3 py-2 text-xs transition hover:border-[#c9d8d1] hover:bg-[#fafcfb]">
+                      <Link href={row.warehouseId ? `/warehouses?warehouse=${row.warehouseId}` : "/warehouses"} className="dash-row is-link flex items-center justify-between gap-2 px-3 py-2 text-xs">
                         <span className="min-w-0">
                           <b className="text-[#1b3c55]">{row.flowNo}</b>
                           <span className="block truncate text-[11px] text-gray-500">{row.warehouse} · sent {formatDate(row.deliveredAt)}</span>
@@ -975,7 +983,7 @@ export default function Dashboard() {
         </Card>
 
         {d.isAdmin && (
-          <Card className="overflow-hidden">
+          <Card className="dash-card overflow-hidden">
             <CardHeader>
               <SectionTitle eyebrow="Sales" title="Latest bills" action={<MoreLink href="/sales">Sales</MoreLink>} />
             </CardHeader>
@@ -990,7 +998,7 @@ export default function Dashboard() {
                 <p className="text-sm text-gray-500">No sales yet.</p>
               ) : (
                 sales.recent.map((sale) => (
-                  <Link key={sale.id} href={`/sales/${sale.id}`} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 px-3 py-2 text-xs transition hover:border-[#c9d8d1] hover:bg-[#fafcfb]">
+                  <Link key={sale.id} href={`/sales/${sale.id}`} className="dash-row is-link flex items-center justify-between gap-2 px-3 py-2 text-xs">
                     <span className="min-w-0">
                       <b className="text-[#1b3c55]">{sale.saleNo}</b>
                       <span className="block truncate text-[11px] text-gray-500">{sale.party} · {formatDate(sale.saleDate)}</span>
@@ -1010,7 +1018,7 @@ export default function Dashboard() {
           </Card>
         )}
 
-        <Card className={cn("overflow-hidden", !d.isAdmin && "lg:col-span-2 2xl:col-span-1")}>
+        <Card className={cn("dash-card overflow-hidden", !d.isAdmin && "lg:col-span-2 2xl:col-span-1")}>
           <CardHeader>
             <SectionTitle
               eyebrow="Notifications"
@@ -1035,7 +1043,7 @@ export default function Dashboard() {
                 const kind = notificationKind(alert);
                 const AlertIcon = notificationIcon(alert);
                 return (
-                  <div key={alert.id} className={cn("flex gap-3 rounded-2xl border p-3", urgent ? "border-rose-200 bg-rose-50/60" : "border-gray-100 bg-gray-50/60")}>
+                  <div key={alert.id} className={cn("dash-alert flex gap-3 p-3", urgent && "is-urgent")}>
                     <span className={cn("attn-icon mt-0.5", `is-${kind}`, urgent && "is-urgent")}><AlertIcon size={15} /></span>
                     <div className="min-w-0">
                       <p className="truncate text-xs font-bold text-gray-800">
