@@ -127,7 +127,12 @@ export type ReceivedChallan = {
     /** Still to come on the line after this receipt. */
     balance: number;
     rate: number | null;
+    /** Taxable value: quantity × rate. */
     amount: number | null;
+    gstRate?: number | null;
+    gstAmount?: number | null;
+    /** Amount with GST, as on the purchase entry. */
+    totalAmount?: number | null;
     /** The item's full details: this receipt's lot, distributor, PO, and for fabric its construction. */
     specs: Array<{ label: string; value: string }>;
     /** Bags / rolls as written at receipt ("30+9") and their total. */
@@ -135,7 +140,10 @@ export type ReceivedChallan = {
     packageCount?: number | null;
     details?: string | null;
   }>;
-  /** Null when prices are hidden from the viewer. */
+  /** Taxable value and GST of what was received; null when prices are hidden from the viewer. */
+  subtotal?: number | null;
+  gstAmount?: number | null;
+  /** With GST, the same as the purchase entry's total for what was received. Null when prices are hidden. */
   total: number | null;
   pricesShown: boolean;
   company: Record<string, string | undefined>;

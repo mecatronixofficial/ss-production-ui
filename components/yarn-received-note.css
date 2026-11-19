@@ -5,6 +5,8 @@
   --yrn-soft: #555;
   color: var(--yrn-ink);
   font-family: Arial, "Helvetica Neue", Helvetica, sans-serif;
+  /* Room above the frame for the title tab, so it is never cut off at the top of the printed page. */
+  padding-top: .95rem;
 }
 .yrn__frame {
   position: relative;
@@ -57,14 +59,22 @@
 .yrn__to-line { padding-left: 3.6rem; font-size: .72rem; line-height: 1.35; color: var(--yrn-soft); }
 
 /* Reference box: PO, challan, vehicle, warehouse… */
+/* Up to five details sit in one even row; more wrap three to a row. No empty boxes either way. */
 .yrn__facts {
   display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
+  grid-template-columns: repeat(var(--yrn-fact-cols, 3), minmax(0, 1fr));
   border: 1.5px solid var(--yrn-line);
   border-top: 0;
 }
-.yrn__facts > div { border-right: 1px solid #c8c8c8; border-bottom: 1px solid #c8c8c8; padding: .35rem .6rem; }
-.yrn__facts > div:nth-child(3n) { border-right: 0; }
+.yrn__facts > div { border-right: 1px solid #c8c8c8; padding: .35rem .6rem; }
+.yrn__facts > div:nth-child(n + 4) { border-top: 1px solid #c8c8c8; }
+.yrn__facts.is-one-row > div:nth-child(n + 4) { border-top: 0; }
+.yrn__facts > div:last-child,
+.yrn__facts:not(.is-one-row) > div:nth-child(3n) { border-right: 0; }
+.yrn__facts.is-one-row > div:nth-child(3n):not(:last-child) { border-right: 1px solid #c8c8c8; }
+/* A last row with fewer details stretches them across the full width. */
+.yrn__facts:not(.is-one-row) > div:last-child:nth-child(3n + 1) { grid-column: span 3; }
+.yrn__facts:not(.is-one-row) > div:last-child:nth-child(3n + 2) { grid-column: span 2; }
 .yrn__facts dt { font-size: .6rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; color: var(--yrn-soft); }
 .yrn__facts dd { margin-top: .1rem; font-size: .8rem; font-weight: 700; overflow-wrap: anywhere; }
 
@@ -97,11 +107,23 @@
 .yrn__code { font-family: ui-monospace, SFMono-Regular, Menlo, monospace; font-size: .74rem !important; white-space: nowrap; }
 .yrn__num { text-align: right; white-space: nowrap; font-variant-numeric: tabular-nums; }
 .yrn__strong { font-weight: 800; }
+/* Rolls / bags sit in the middle of their box, as written in the book. */
+.yrn__num.yrn__center { text-align: center; }
 .yrn__blank td { height: 1.9rem; }
 .yrn__empty { text-align: center; color: var(--yrn-soft); }
 .yrn__table tfoot td { height: auto; border-top: 1.5px solid var(--yrn-line); padding: .45rem; vertical-align: middle; font-weight: 800; }
 .yrn__job { display: flex; align-items: center; justify-content: space-between; gap: .75rem; font-size: .84rem; font-weight: 600; }
+.yrn__job.is-total-only { justify-content: flex-end; }
 .yrn__job span { font-family: "Times New Roman", serif; font-size: .82rem; font-weight: 800; letter-spacing: .03em; }
+
+/* Money totals: taxable value, GST, total with GST */
+.yrn__summary { margin: .5rem 0 0 auto; width: min(100%, 19rem); border: 1.5px solid var(--yrn-line); }
+.yrn__summary > div { display: flex; justify-content: space-between; gap: 1rem; border-bottom: 1px solid #c8c8c8; padding: .3rem .6rem; font-size: .8rem; }
+.yrn__summary > div:last-child { border-bottom: 0; }
+.yrn__summary dt { font-weight: 600; }
+.yrn__summary dd { font-weight: 700; font-variant-numeric: tabular-nums; }
+.yrn__summary > .is-strong { border-top: 1.5px solid var(--yrn-line); font-size: .9rem; }
+.yrn__summary > .is-strong dt, .yrn__summary > .is-strong dd { font-weight: 800; }
 
 .yrn__note { margin-top: .4rem; font-size: .74rem; }
 .yrn__note--muted { color: var(--yrn-soft); font-size: .68rem; }
@@ -128,9 +150,10 @@
   .yrn__head { grid-template-columns: minmax(0, 1fr); }
   .yrn__company { border-right: 0; border-bottom: 1.5px solid var(--yrn-line); }
   .yrn__name { font-size: 1.4rem; }
-  .yrn__facts { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-  .yrn__facts > div:nth-child(3n) { border-right: 1px solid #c8c8c8; }
-  .yrn__facts > div:nth-child(2n) { border-right: 0; }
+  .yrn__facts, .yrn__facts.is-one-row { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .yrn__facts > div { grid-column: auto !important; border-top: 1px solid #c8c8c8 !important; border-right: 1px solid #c8c8c8 !important; }
+  .yrn__facts > div:nth-child(-n + 2) { border-top: 0 !important; }
+  .yrn__facts > div:nth-child(2n), .yrn__facts > div:last-child { border-right: 0 !important; }
   .yrn__foot { grid-template-columns: minmax(0, 1fr); gap: .75rem; }
   .yrn__to-line { padding-left: 0; }
 }
@@ -138,4 +161,31 @@
 @media print {
   .yrn__table-wrap { overflow: visible; }
   .yrn__table tr, .yrn__facts, .yrn__foot { break-inside: avoid; }
+}
+
+/* Delivery note (components/delivery-note.tsx): the delivery note book, same paper and ruling */
+.dln .yrn__frame { padding-top: 1.55rem; }
+.dln__gstin { position: absolute; top: .3rem; left: .85rem; font-size: .68rem; font-weight: 700; letter-spacing: .02em; }
+.dln .yrn__meta { gap: .4rem; }
+.dln__table th:not(.dln__particulars-head) { width: 9%; }
+.dln__table th:last-child { width: 15%; }
+.dln__particulars-head { width: auto; }
+.dln__unit { display: block; margin-top: .1rem; font-size: .6rem; font-weight: 600; }
+.dln__table tbody td { height: 2.15rem; vertical-align: middle; }
+/* "Mill Name  :  value": a fixed label column so every colon lines up, as in the book. */
+.dln__label { display: inline-block; min-width: 5.6rem; font-size: .8rem; font-weight: 600; }
+.dln__colon { display: inline-block; width: 1rem; font-weight: 700; }
+.dln__particular b { font-size: .88rem; font-weight: 700; }
+.dln__center { text-align: center; }
+.dln__foot { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr) minmax(0, 1fr); align-items: end; }
+.dln__foot .yrn__sign p { margin-top: .15rem; }
+
+/* Notes never widen their dialog: wide tables scroll inside .yrn__table-wrap instead. */
+.yrn, .yrn__frame, .yrn__table-wrap { min-width: 0; max-width: 100%; }
+@media (max-width: 640px) {
+  /* The GSTIN goes above the letterhead, clear of the title tab. */
+  .dln .yrn__frame { padding-top: 1.3rem; }
+  .dln__gstin { position: static; margin-bottom: .45rem; }
+  .dln__label { min-width: 4.4rem; }
+  .yrn__tab { font-size: .72rem; }
 }

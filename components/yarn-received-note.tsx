@@ -17,7 +17,7 @@ export type NoteRow = {
   particulars: string;
   /** Under the item: its material and full details (count, mill, lot…). */
   sub?: ReactNode;
-  code: ReactNode;
+  code?: ReactNode;
   bags: number | null;
   quantity: number;
   unit: string;
@@ -41,9 +41,15 @@ type NoteProps = {
   rows: NoteRow[];
   cancelled?: boolean;
   notes?: string | null;
+  /** Money totals under the table, right-aligned: taxable value, GST, total with GST. */
+  summary?: Array<{ label: string; value: ReactNode; strong?: boolean }>;
   /** Small print under the table. */
   footnotes?: Array<string | null | undefined | false>;
   signs?: [string, string];
+  /** Prints "Not For Sales only Job Work" in the total row, as the book does. */
+  jobWork?: boolean;
+  /** Shows the item code column. */
+  codeColumn?: boolean;
 };
 
 const isKg = (unit: string) => unit.trim().toUpperCase() === "KG";
@@ -66,20 +72,37 @@ function kiloGrams(kg: number): [string, string] {
 const MIN_ROWS = 4;
 
 /**
+ * A receipt entered with a date only is stored at midnight UTC, which reads as a false "05:30 am" in India:
+ * those show the date alone, others the date and time.
+ */
+const whenReceived = (value: string) => (/T00:00:00(\.000)?Z$/.test(value) ? formatDate(value) : formatDateTime(value));
+
+/** The knitting division's address as printed on its yarn received note book; used when Settings has none. */
+const BOOK_ADDRESS = ["No.1A, Puthuran Thottam, Samundipuram South,", "Tirupur - 641 603."];
+const BOOK_PHONE = "94437 60226";
+
+/** "GRN-2026-000001" → "01": the running number alone, as the book numbers its notes. */
+export const shortNo = (number: string) => {
+  const digits = /(\d+)$/.exec(number)?.[1];
+  return digits ? String(Number(digits)).padStart(2, "0") : number;
+};
+
+/**
  * A received challan in the layout of the knitting division's printed book (white paper, black ruling, typed text):
  * letterhead with the note's number, date and "To M/s", the reference box, one row per item with its bags and weight
  * in kilo and grams, the total, "Not for sales, only job work", and signatures for the company.
  */
 export function ReceivedNote(props: NoteProps) {
-  const { title, number, date, company: c, to, toLines = [], facts, weightLabel = "Weight", before = [], after = [], rows, cancelled, notes, footnotes = [], signs = ["Delivered by", "Received by (godown)"] } = props;
+  const { title, number, date, company: c, to, toLines = [], facts, weightLabel = "Weight", before = [], after = [], rows, cancelled, notes, summary, footnotes = [], signs = ["Delivered by", "Received by (godown)"], jobWork = true, codeColumn = true } = props;
   const company = c.name || BRAND.name;
-  const address = [c.address, [c.city, c.state, c.pincode].filter(Boolean).join(" - ")].filter(Boolean);
+  const address = c.address ? [c.address, [c.city, c.state, c.pincode].filter(Boolean).join(" - ")].filter(Boolean) : BOOK_ADDRESS;
+  const phone = c.phone || BOOK_PHONE;
   const kgRows = rows.filter((row) => isKg(row.unit));
   const otherRows = rows.filter((row) => !isKg(row.unit));
   const totalBags = rows.some((row) => row.bags !== null) ? rows.reduce((sum, row) => sum + (row.bags ?? 0), 0) : null;
   const [totalKilo, totalGrams] = kiloGrams(kgRows.reduce((sum, row) => sum + row.quantity, 0));
   const fillers = Math.max(0, MIN_ROWS - rows.length);
-  const span = 6 + before.length + after.length;
+  const span = (codeColumn ? 6 : 5) + before.length + after.length;
   const extra = (column: NoteColumn, row: NoteRow) => <td key={column.key} className="yrn__num">{row.cells?.[column.key] ?? "—"}</td>;
 
   return (
@@ -92,7 +115,7 @@ export function ReceivedNote(props: NoteProps) {
             <p className="yrn__name">{company}</p>
             <p className="yrn__division">(Knitting Division)</p>
             {address.map((part) => <p key={part} className="yrn__address">{part}</p>)}
-            {c.phone && <p className="yrn__cell">Cell : {c.phone}</p>}
+            <p className="yrn__cell">Cell : {phone}</p>
             {c.gst && <p className="yrn__address">GSTIN {c.gst}</p>}
           </div>
           <div className="yrn__meta">
@@ -105,7 +128,10 @@ export function ReceivedNote(props: NoteProps) {
           </div>
         </header>
 
-        <dl className="yrn__facts">
+        <dl
+          className={`yrn__facts${facts.length <= 5 ? " is-one-row" : ""}`}
+          style={facts.length <= 5 ? ({ "--yrn-fact-cols": facts.length } as React.CSSProperties) : undefined}
+        >
           {facts.map((fact) => (
             <div key={fact.label}><dt>{fact.label}</dt><dd>{fact.value}</dd></div>
           ))}
@@ -117,7 +143,7 @@ export function ReceivedNote(props: NoteProps) {
               <tr>
                 <th rowSpan={2} className="yrn__col-no">#</th>
                 <th rowSpan={2}>Particulars</th>
-                <th rowSpan={2}>Code</th>
+                {codeColumn && <th rowSpan={2}>Code</th>}
                 <th rowSpan={2}>No. of<br />Roll/ Bag</th>
                 {before.map((column) => <th key={column.key} rowSpan={2}>{column.label}</th>)}
                 <th colSpan={2}>{weightLabel}</th>
@@ -132,8 +158,8 @@ export function ReceivedNote(props: NoteProps) {
                   <tr key={row.id}>
                     <td className="yrn__col-no">{index + 1}</td>
                     <td className="yrn__particulars"><b>{row.particulars}</b>{row.sub}</td>
-                    <td className="yrn__code">{row.code}</td>
-                    <td className="yrn__num">{row.bags ?? "—"}</td>
+                    {codeColumn && <td className="yrn__code">{row.code}</td>}
+                    <td className="yrn__num yrn__center">{row.bags ?? "—"}</td>
                     {before.map((column) => extra(column, row))}
                     <td className="yrn__num yrn__strong">{kilo}</td>
                     <td className="yrn__num yrn__strong">{grams}</td>
@@ -150,8 +176,8 @@ export function ReceivedNote(props: NoteProps) {
             </tbody>
             <tfoot>
               <tr>
-                <td colSpan={3}><div className="yrn__job">Not For Sales only Job Work<span>TOTAL</span></div></td>
-                <td className="yrn__num">{totalBags ?? "—"}</td>
+                <td colSpan={codeColumn ? 3 : 2}><div className={`yrn__job${jobWork ? "" : " is-total-only"}`}>{jobWork && "Not For Sales only Job Work"}<span>TOTAL</span></div></td>
+                <td className="yrn__num yrn__center">{totalBags ?? "—"}</td>
                 {before.map((column) => <td key={column.key} className="yrn__num">{column.total ?? ""}</td>)}
                 <td className="yrn__num">{totalKilo}</td>
                 <td className="yrn__num">{totalGrams}</td>
@@ -160,6 +186,13 @@ export function ReceivedNote(props: NoteProps) {
             </tfoot>
           </table>
         </div>
+        {summary && (
+          <dl className="yrn__summary">
+            {summary.map((item) => (
+              <div key={item.label} className={item.strong ? "is-strong" : undefined}><dt>{item.label}</dt><dd>{item.value}</dd></div>
+            ))}
+          </dl>
+        )}
         {otherRows.length > 0 && <p className="yrn__note">Also received, not in the kilo total: {unitTotals(otherRows, (row) => row.quantity)}.</p>}
         {notes && <p className="yrn__note"><b>Remarks:</b> {notes}</p>}
         {footnotes.filter(Boolean).map((line) => <p key={String(line)} className="yrn__note yrn__note--muted">{line}</p>)}
@@ -230,63 +263,68 @@ export function GrnReceivedNote({ challan }: { challan: ReceivedChallan }) {
   const s = challan.supplier;
   const po = challan.purchaseOrder;
   const withPrices = challan.pricesShown;
+  // Taxable value and GST (an older server sends only the taxable total).
+  const subtotal = challan.subtotal ?? challan.lines.reduce((sum, line) => sum + (line.amount ?? 0), 0);
+  const gst = challan.gstAmount ?? 0;
   const yarnOnly = challan.lines.length > 0 && challan.lines.every((line) => line.category === "YARN");
   return (
     <ReceivedNote
       title={yarnOnly ? "Yarn Received Note" : "Material Received Note"}
-      number={challan.receiptNo}
+      number={shortNo(challan.receiptNo)}
       date={challan.receivedAt}
       company={challan.company}
       to={s.name}
       toLines={[
         s.company && s.company !== s.name ? s.company : null,
-        `${s.partyType === "MILL" ? "Mill" : "Distributor"} ${s.code}${s.contactPerson ? ` · ${s.contactPerson}` : ""}${s.mobile ? ` · ${s.mobile}` : ""}`,
         s.address,
         s.gst && `GSTIN ${s.gst}`,
       ]}
       facts={[
         { label: "Purchase order", value: po.poNo },
-        { label: "PO date", value: formatDate(po.orderDate) },
-        { label: "Supplier challan / invoice", value: challan.challanNo || "—" },
-        { label: "Vehicle no", value: challan.vehicleNo || "—" },
-        { label: "Supplier lot", value: challan.lotNo || "—" },
-        { label: "Received at", value: formatDateTime(challan.receivedAt) },
-        { label: "Received by", value: challan.receivedBy || "—" },
+        { label: "Received at", value: whenReceived(challan.receivedAt) },
+        { label: "Received by", value: challan.warehouse.name },
         { label: "PO status now", value: STATUS_LABEL[po.status] },
-        {
-          label: "Received into",
-          value: `${challan.warehouse.code} · ${challan.warehouse.name}${po.warehouse && po.warehouse.id !== challan.warehouse.id ? ` (ordered for ${po.warehouse.code})` : ""}`,
-        },
       ]}
+      jobWork={false}
+      codeColumn={false}
       weightLabel="Received now"
       before={[
         { key: "ordered", label: "Ordered", total: unitTotals(challan.lines, (line) => line.ordered) },
-        { key: "earlier", label: "Earlier received", total: unitTotals(challan.lines, (line) => line.receivedBefore) },
       ]}
       after={[
-        { key: "balance", label: "Balance to come", total: unitTotals(challan.lines, (line) => line.balance) },
-        ...(withPrices ? [{ key: "rate", label: "Rate" }, { key: "amount", label: "Amount", total: money(challan.total ?? 0) }] : []),
+        ...(withPrices
+          ? [
+              { key: "rate", label: "Rate" },
+              { key: "amount", label: "Amount", total: money(subtotal) },
+              { key: "gst", label: "GST", total: money(gst) },
+              { key: "total", label: "Total", total: money(challan.total ?? 0) },
+            ]
+          : []),
       ]}
+      summary={withPrices ? [
+        { label: "Taxable value", value: money(subtotal) },
+        { label: "GST", value: money(gst) },
+        { label: "Total with GST", value: money(challan.total ?? 0), strong: true },
+      ] : undefined}
       rows={challan.lines.map((line) => ({
         id: line.id,
         particulars: line.itemName,
-        sub: <><span className="yrn__material">{humanize(line.category)}</span><ItemSpecs specs={line.specs} itemCode={line.itemCode} hide={["Material", "PO"]} /></>,
-        code: line.itemCode ?? "—",
+        sub: <><span className="yrn__material">{humanize(line.category)}</span><ItemSpecs specs={line.specs} itemCode={line.itemCode} hide={["Material", "PO", "Distributor", "Lot", "Bags", "Rolls", "Packages", "Packs", "KG per bag"]} /></>,
         bags: line.packageCount ?? bagCount(line.packages),
         quantity: line.quantity,
         unit: line.unit,
         cells: {
           ordered: qty(line.ordered, line.unit),
-          earlier: qty(line.receivedBefore, line.unit),
-          balance: line.balance > 1e-9 ? qty(line.balance, line.unit) : "Complete",
           rate: money(line.rate ?? 0),
           amount: money(line.amount ?? 0),
+          gst: <>{line.gstRate ?? 0}%<span className="block">{money(line.gstAmount ?? 0)}</span></>,
+          total: <b>{money(line.totalAmount ?? line.amount ?? 0)}</b>,
         },
       }))}
       notes={challan.notes}
       footnotes={[
-        withPrices && "Value at purchase-order rates, before tax.",
-        `Material checked and taken into stock. Posted ${formatDateTime(challan.receivedAt)}${challan.receivedBy ? ` by ${challan.receivedBy}` : ""}.`,
+        withPrices && "At purchase-order rates and GST: the total with GST matches the purchase entry for what was received.",
+        `Material checked and taken into stock. Posted ${whenReceived(challan.receivedAt)}.`,
       ]}
       signs={["Delivered by (driver)", "Received by (godown)"]}
     />

@@ -93,7 +93,7 @@ type PurchaseLineDraft = {
   /** The quantity was worked out from bags × KG per bag (and follows them until typed over). */
   autoQuantity: boolean;
 };
-type LineErrors = Partial<Record<"itemName" | "quantity" | "rate" | "gstRate", string>>;
+type LineErrors = Partial<Record<"itemName" | "quantity" | "rate" | "gstRate" | "bags", string>>;
 /** STALLED comes from "needs attention"; the rest are the register's tabs. */
 type StatusFilter = "ALL" | "OPEN" | "STALLED" | PurchaseStatus;
 type RegisterView = "orders" | "challans" | "yarn";
@@ -175,9 +175,13 @@ const decimals = (value: string) => (value.split(".")[1] ?? "").length;
  * Mirrors the backend DTO (quantity ≥ 0.001 with 3 decimals, rate ≥ 0 with 2) so the problem shows on the line. A line
  * without a name takes the one its details suggest.
  */
-function lineErrors(line: PurchaseLineDraft, suggestion = ""): LineErrors {
+function lineErrors(line: PurchaseLineDraft, suggestion = "", yarn = false): LineErrors {
   const e: LineErrors = {};
-  if (!line.itemName.trim() && !suggestion) e.itemName = "Enter the item name, or its details below.";
+  if (!line.itemName.trim() && !suggestion) e.itemName = yarn ? "Enter the item name (count), e.g. 36'S." : "Enter the item name, or its details below.";
+  // Yarn is ordered by its bags: the goods receipt fills them in and the received note prints them.
+  const bags = line.specs.Bags?.trim() ?? "";
+  if (yarn && !bags) e.bags = "Enter the number of bags.";
+  else if (yarn && !/^\d+(\s*\+\s*\d+)*$/.test(bags)) e.bags = "Bags as numbers, e.g. 22 or 30+9.";
   const quantity = Number(line.quantity);
   if (!line.quantity || !(quantity > 0)) e.quantity = "Enter a quantity above 0.";
   else if (line.unit === "G" && decimals(line.quantity) > 0) e.quantity = "Grams are whole numbers.";
@@ -469,7 +473,7 @@ export default function PurchasesPage() {
     if (!purchase.warehouseId) return setCreateError("Choose the warehouse the material is delivered to.");
     if (!purchase.orderDate || purchase.orderDate > todayInput()) return setCreateError("Choose the actual purchase date, today or earlier.");
     if (filled.length === 0) return setCreateError("Add at least one item.");
-    if (filled.some((line) => Object.keys(lineErrors(line, nameOf(line))).length > 0)) {
+    if (filled.some((line) => Object.keys(lineErrors(line, nameOf(line), groupOf(line) === "yarn")).length > 0)) {
       setShowLineErrors(true);
       return setCreateError("Fix the highlighted item lines.");
     }
@@ -480,11 +484,15 @@ export default function PurchasesPage() {
       unit: line.unit,
       rate: Math.round(Number(line.rate) * 100) / 100,
       gstRate: Number(line.gstRate),
-      // In the order its form asks them; any kept from another material after the material changed go last.
-      specs: [
-        ...SPEC_FIELDS[groupOf(line)].map((f) => ({ label: f.label, value: line.specs[f.label] ?? "" })),
-        ...Object.entries(line.specs).filter(([label]) => !SPEC_FIELDS[groupOf(line)].some((f) => f.label === label)).map(([label, value]) => ({ label, value })),
-      ].filter((s) => s.value.trim()),
+      // Yarn is ordered with its bags only (the goods receipt and received note use them). Other material: its
+      // details in the order its form asks them; any kept from another material after the material changed go last.
+      specs: (groupOf(line) === "yarn"
+        ? [{ label: "Bags", value: (line.specs.Bags ?? "").replace(/\s+/g, "") }]
+        : [
+            ...SPEC_FIELDS[groupOf(line)].map((f) => ({ label: f.label, value: line.specs[f.label] ?? "" })),
+            ...Object.entries(line.specs).filter(([label]) => !SPEC_FIELDS[groupOf(line)].some((f) => f.label === label)).map(([label, value]) => ({ label, value })),
+          ]
+      ).filter((s) => s.value.trim()),
     }));
     setBusy(true);
     try {
@@ -781,7 +789,7 @@ export default function PurchasesPage() {
 
   const filledLines = lines.filter((line) => !isBlank(line));
   const draftTotals = purchaseTotals(filledLines);
-  const draftErrors = new Map(lines.map((line) => [line.key, showLineErrors && !isBlank(line) ? lineErrors(line, nameOf(line)) : {}]));
+  const draftErrors = new Map(lines.map((line) => [line.key, showLineErrors && !isBlank(line) ? lineErrors(line, nameOf(line), groupOf(line) === "yarn") : {}]));
 
   const statTile = (filter: StatusFilter) => ({
     type: "button" as const,
@@ -849,7 +857,6 @@ export default function PurchasesPage() {
               {lines.map((line, index) => {
                 const e = draftErrors.get(line.key) ?? {};
                 const group = groupOf(line);
-                const byBags = group === "yarn" ? bagsKg(line.specs) : null;
                 const totals = purchaseLineTotals(line);
                 return (
                   <Card key={line.key} className="purchases-card">
@@ -891,17 +898,33 @@ export default function PurchasesPage() {
                           <Input type="number" inputMode="decimal" min="0" max="100" step="0.01" list="purchase-gst-rates" value={line.gstRate} onChange={(event) => updateLine(line.key, "gstRate", event.target.value)} aria-label={`GST percentage, line ${index + 1}`} aria-invalid={Boolean(e.gstRate)} />
                           {e.gstRate && <p className="purchases-line-error">{e.gstRate}</p>}
                         </label>
+                        {group === "yarn" && (
+                          <label>
+                            <span className="erp-label">No. of bags *</span>
+                            <Input
+                              inputMode="numeric"
+                              maxLength={40}
+                              value={line.specs.Bags ?? ""}
+                              onChange={(event) => updateSpec(line.key, "Bags", event.target.value.replace(/[^\d+\s]/g, ""))}
+                              placeholder="22 or 30+9"
+                              aria-label={`No. of bags, line ${index + 1}`}
+                              aria-invalid={Boolean(e.bags)}
+                            />
+                            {e.bags ? <p className="purchases-line-error">{e.bags}</p> : <p className="mt-1 text-[11px] text-gray-500">Filled in on the goods receipt and printed on the received note.</p>}
+                          </label>
+                        )}
                       </div>
-                      <div className="purchases-specs">
-                        <p className="purchases-specs__title">{SPEC_GROUP_LABEL[group]}</p>
-                        {byBags && <p className="mb-3 text-xs text-gray-600">{byBags.count} bags × {line.specs["KG per bag"]} KG = <b>{byBags.kg.toLocaleString("en-IN")} KG</b>{line.autoQuantity ? " (quantity)" : ""}</p>}
-                        <div className="purchases-specs__grid">
-                          {SPEC_FIELDS[group].map((field) => <label key={field.label}>
-                            <span>{field.label}</span>
-                            <Input className="h-9 text-sm" maxLength={120} placeholder={field.placeholder} value={line.specs[field.label] ?? ""} onChange={(event) => updateSpec(line.key, field.label, field.label === "Bags" ? event.target.value.replace(/[^\d+\s]/g, "") : event.target.value)} aria-label={`${field.label}, line ${index + 1}`} />
-                          </label>)}
+                      {group !== "yarn" && (
+                        <div className="purchases-specs">
+                          <p className="purchases-specs__title">{SPEC_GROUP_LABEL[group]}</p>
+                          <div className="purchases-specs__grid">
+                            {SPEC_FIELDS[group].map((field) => <label key={field.label}>
+                              <span>{field.label}</span>
+                              <Input className="h-9 text-sm" maxLength={120} placeholder={field.placeholder} value={line.specs[field.label] ?? ""} onChange={(event) => updateSpec(line.key, field.label, ["Bags", "Rolls", "Packs"].includes(field.label) ? event.target.value.replace(/[^\d+\s]/g, "") : event.target.value)} aria-label={`${field.label}, line ${index + 1}`} />
+                            </label>)}
+                          </div>
                         </div>
-                      </div>
+                      )}
                       <dl className="flex flex-wrap justify-end gap-x-8 gap-y-3 border-t pt-3 text-right text-sm tabular-nums" aria-label={`Item ${index + 1} totals`}>
                         <div><dt className="text-xs text-gray-500">Before GST</dt><dd className="mt-1 font-semibold">{money(totals.subtotal)}</dd></div>
                         <div><dt className="text-xs text-gray-500">GST {line.gstRate}%</dt><dd className="mt-1 font-semibold">{money(totals.gstAmount)}</dd></div>
